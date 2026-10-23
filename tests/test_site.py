@@ -9,7 +9,7 @@ ROOT=Path(__file__).resolve().parents[1]
 TS=1792770000
 STUB=r'''
 Date.now=()=>1792769990000;
-globalThis.setTimeout=()=>1;globalThis.clearTimeout=()=>{};globalThis.setInterval=()=>1;
+globalThis.setTimeout=()=>1;globalThis.clearTimeout=()=>{};globalThis.setInterval=()=>1;globalThis.clearInterval=()=>{};
 class Element {
  constructor(){this.textContent='';this.hidden=false;this.href='';this.listeners={};this.attrs={};this.children=[];this.classList={toggle:()=>{}};}
  addEventListener(k,v){this.listeners[k]=v;}click(){}
@@ -143,8 +143,8 @@ def test_early_draft_cutoff_remains_in_past(js):
 
 def test_static_site_paths_and_no_secret_patterns():
     html=(ROOT/'index.html').read_text()
-    assert 'href="./style.css?v=3"' in html and 'src="./app.js?v=3"' in html
-    assert 'href="./terminal.css?v=3"' in html
+    assert 'href="./style.css?v=4"' in html and 'src="./app.js?v=4"' in html
+    assert 'href="./terminal.css?v=4"' in html
     assert 'http-equiv="Content-Security-Policy"' in html
     assert 'No demonstrated predictive edge' in html
     js=(ROOT/'app.js').read_text()
@@ -290,3 +290,248 @@ def test_paired_brier_uses_identical_valid_cohort(js):
 def test_paired_comparison_rejects_stale_future_or_untimestamped_quotes(js,field,v):
     r=paired_record();r['context']['books']['up'][field]=v
     assert js.eval(f'pairedMarketScores([{json.dumps(r)}])') is None
+
+
+def oracle_message(ts=TS-300,price=81531.15249742479):
+    return {'topic':'crypto_prices_twap_sixty','type':'subscribe',
+            'payload':{'symbol':'btc/usd','window_s':60,'data':[{'timestamp':ts*1000,'value':price}]}}
+
+
+def oracle_state(js,price=101,reference=100,source='polymarket-twap-boundary'):
+    matching_oracle_market(js)
+    js.eval(f'Date.now=()=>{TS+30}000;state.oracle.socket={{readyState:1}};state.oracle.reference={{ts:{TS},price:{reference},source:"{source}",captured_at:{TS+1}}};state.oracle.latest={{price:{price},exchange_ts:now()-2,received_at:now()}}')
+
+
+def matching_oracle_market(js):
+    js.eval(f'state.lastCurrent={{ts:{TS},source:ORACLE,raw:{{slug:slug({TS}),eventStartTime:new Date({TS}000).toISOString(),endDate:new Date({TS+300}000).toISOString(),cryptoMarketConfig:{{asset:"btc",duration:"5m",twapEnabled:true,twapLookbackSeconds:60}}}}}}')
+
+
+@pytest.mark.parametrize('price,side',[(101,'up'),(99,'down'),(100,'up')])
+def test_price_to_beat_direction_and_exact_tie_rule(js,price,side):
+    oracle_state(js,price)
+    assert js.eval('oracleComparison().direction')==side
+    assert js.eval('oracleComparison().delta')==price-100
+
+
+@pytest.mark.parametrize('price',[100,100.002,99.998])
+def test_rounded_manual_tie_not_given_false_precision(js,price):
+    oracle_state(js,price,source='manual')
+    assert js.eval('oracleComparison().direction')=='rounded-tie'
+
+
+def test_price_to_beat_is_not_coinbase_proxy(js):
+    oracle_state(js,99)
+    js.eval('state.price={price:100000,exchange_ts:now(),received_at:now()};render()')
+    assert js.eval('$("reference-direction").textContent')=='DOWN'
+    assert js.eval('oracleComparison().delta')==-1
+
+
+@pytest.mark.parametrize('code',[
+    'state.oracle.latest.exchange_ts=now()-21',
+    'state.oracle.latest.received_at=now()-21',
+    'state.oracle.latest.exchange_ts=now()+3',
+    f'state.oracle.latest.exchange_ts={TS-1}',
+    f'state.oracle.reference.ts={TS-300}',
+    'state.oracle.socket.readyState=3',
+    'state.paused=true',
+    'state.oracle.reference=null',
+    'state.oracle.latest=null',
+])
+def test_comparison_suppressed_when_reference_or_live_price_not_valid(js,code):
+    oracle_state(js)
+    js.eval(code+';renderOracle()')
+    assert js.eval('$("reference-direction").textContent')=='WAITING'
+    assert js.eval('oracleComparison().direction') is None
+
+
+def test_comparison_resets_at_each_five_minute_boundary(js):
+    oracle_state(js)
+    js.eval('renderOracle();$("reference-input").value="100";Date.now=()=>'+str((TS+300)*1000)+';renderOracle()')
+    assert js.eval('$("reference-direction").textContent')=='WAITING'
+    assert js.eval('$("price-to-beat").textContent')=='—'
+    assert js.eval('$("reference-input").value')==''
+
+
+def test_exact_boundary_feed_point_sets_automatic_reference(js):
+    js.eval(f'Date.now=()=>{TS+10}000')
+    m=oracle_message(TS)
+    assert js.eval(f'ingestOracleMessage({json.dumps(m)})')
+    assert js.eval('state.oracle.reference.price')==m['payload']['data'][0]['value']
+    assert js.eval('state.oracle.reference.source')=='polymarket-twap-boundary'
+
+
+def test_near_boundary_is_not_used_as_official_open(js):
+    js.eval(f'Date.now=()=>{TS+10}000')
+    assert js.eval(f'ingestOracleMessage({json.dumps(oracle_message(TS+1))})')
+    assert js.eval('state.oracle.reference') is None
+
+
+@pytest.mark.parametrize('field,bad',[
+    ('topic','crypto_prices_chainlink'),('topic','crypto_prices'),('type','unknown'),
+    ('symbol','eth/usd'),('window_s',30),('window_s',None),('window_s','60')])
+def test_wrong_feed_symbol_or_lookback_rejected(js,field,bad):
+    m=oracle_message()
+    if field in ['topic','type']:m[field]=bad
+    else:m['payload'][field]=bad
+    assert value(js,f'parseOracleMessage({json.dumps(m)})')==[]
+
+
+@pytest.mark.parametrize('point',[
+    {'timestamp':TS*1000,'value':None},{'timestamp':TS*1000,'value':-1},
+    {'timestamp':TS*1000,'value':'100'}, {'timestamp':(TS-1000)*1000,'value':100},
+    {'timestamp':TS,'value':100}, {'timestamp':(TS+100)*1000,'value':100}])
+def test_invalid_or_future_oracle_points_rejected(js,point):
+    m=oracle_message();m['payload']['data']=[point]
+    assert value(js,f'parseOracleMessage({json.dumps(m)})')==[]
+
+
+def test_tick_update_and_snapshot_use_same_parser(js):
+    m=oracle_message();p=m['payload'].pop('data')[0];m['payload'].update(p);m['type']='update'
+    assert len(value(js,f'parseOracleMessage({json.dumps(m)})'))==1
+
+
+@pytest.mark.parametrize('raw,expected',[('81,500.25',81500.25),('$81,500.25',81500.25),
+    ('81500.25',81500.25),('0',None),('-1',None),('50%',None),('1e5',None),
+    ('81,50',None),('<script>',None),('Infinity',None),('',None)])
+def test_manual_price_input_is_numeric_not_html_or_odds(js,raw,expected):
+    assert js.eval(f'parseReferenceInput({json.dumps(raw)})')==expected
+
+
+def test_manual_reference_bound_to_window_and_persists_separately(js):
+    js.eval(f'Date.now=()=>{TS+30}000')
+    before=js.eval('localStorage.getItem(KEY)')
+    assert js.eval(f'setManualReference("81,500.25",{TS})')
+    assert js.eval('state.oracle.reference.source')=='manual'
+    assert js.eval('localStorage.getItem(KEY)')==before
+    js.eval('state.oracle.reference=null;loadReference()')
+    assert js.eval('state.oracle.reference.price')==81500.25
+
+
+def test_manual_input_boundary_race_rejected(js):
+    js.eval(f'Date.now=()=>{TS+300}000')
+    assert not js.eval(f'setManualReference("100",{TS})')
+    assert js.eval('state.oracle.reference') is None
+
+
+def test_manual_price_cannot_override_exact_automatic_value(js):
+    oracle_state(js)
+    assert not js.eval(f'setManualReference("500",{TS})')
+    assert js.eval('state.oracle.reference.price')==100
+
+
+def test_automatic_reference_reconciles_incorrect_manual_input(js):
+    js.eval(f'Date.now=()=>{TS+10}000;setManualReference("1",{TS})')
+    js.eval(f'ingestOracleMessage({json.dumps(oracle_message(TS,100))})')
+    assert js.eval('state.oracle.reference.price')==100
+    assert 'differs' in js.eval('state.oracle.notice')
+
+
+def test_reference_storage_failure_keeps_live_display_without_changing_journal(js):
+    js.eval(f'Date.now=()=>{TS+10}000;localStorage.setItem=()=>{{throw Error("full")}}')
+    assert js.eval(f'setManualReference("100",{TS})')
+    assert js.eval('state.oracle.reference.price')==100
+    assert js.eval('state.storageError') is None
+
+
+def test_subscription_has_exact_verified_twap_topic(js):
+    data=json.loads(js.eval('oracleSubscription()'))
+    assert data['subscriptions'][0]=={'topic':'crypto_prices_twap_sixty','type':'update','filters':'{"symbol":"btc/usd"}'}
+
+
+def test_reference_is_not_a_forecast_or_official_label(js):
+    oracle_state(js)
+    js.eval('render()')
+    assert 'NOT a prediction or an official result' in js.eval('$("reference-detail").textContent')
+    assert js.eval('state.records.length')==0
+    assert 'No scored outcomes' in js.eval('$("scores").textContent')
+
+
+def test_csp_allows_only_needed_oracle_connection():
+    html=(ROOT/'index.html').read_text()
+    assert 'wss://ws-live-data.polymarket.com' in html
+    assert 'LIVE POSITION · NOT A FORECAST' in html
+    assert 'type="password"' not in html
+
+
+WS_STUB=r'''
+globalThis.intervalCalls=[];
+globalThis.timeoutCalls=[];
+globalThis.setInterval=f=>{intervalCalls.push(f);return intervalCalls.length;};
+globalThis.setTimeout=f=>{timeoutCalls.push(f);return timeoutCalls.length;};
+globalThis.sockets=[];
+globalThis.WebSocket=class {
+ constructor(url){this.url=url;this.readyState=0;this.sent=[];sockets.push(this);}
+ send(s){this.sent.push(s);}
+ close(){this.readyState=3;}
+};
+'''
+
+
+def test_websocket_connect_subscribe_and_periodic_snapshot_refresh(js):
+    js.eval(WS_STUB)
+    js.eval('startOracle();sockets[0].readyState=1;sockets[0].onopen()')
+    assert js.eval('sockets[0].url')=='wss://ws-live-data.polymarket.com'
+    assert json.loads(js.eval('sockets[0].sent[0]'))['action']=='subscribe'
+    js.eval('intervalCalls[0]();intervalCalls[0]()')
+    sent=value(js,'sockets[0].sent')
+    assert sent[1:3]==['PING','PING']
+    assert json.loads(sent[3])['action']=='unsubscribe'
+    assert json.loads(sent[4])['action']=='subscribe'
+
+
+def test_socket_message_uses_matching_feed_and_updates_display(js):
+    js.eval(WS_STUB)
+    matching_oracle_market(js)
+    js.eval(f'Date.now=()=>{TS+10}000;startOracle();sockets[0].readyState=1;sockets[0].onopen()')
+    m=oracle_message(TS,100)
+    m['payload']['data'].append({'timestamp':(TS+9)*1000,'value':101})
+    js.eval(f'sockets[0].onmessage({{data:{json.dumps(json.dumps(m))}}})')
+    assert js.eval('$("reference-direction").textContent')=='UP'
+    assert js.eval('$("price-to-beat").textContent')=='$100.00'
+
+
+def test_pause_closes_socket_and_resume_reconnects(js):
+    js.eval(WS_STUB)
+    js.eval('startOracle();sockets[0].readyState=1;$("pause").listeners.click()')
+    assert js.eval('sockets[0].readyState')==3
+    assert js.eval('state.oracle.socket') is None
+    js.eval('$("pause").listeners.click()')
+    assert js.eval('sockets.length')==2
+
+
+def test_transport_failure_suppresses_comparison_and_schedules_retry(js):
+    js.eval(WS_STUB)
+    js.eval('startOracle();sockets[0].readyState=1;sockets[0].onerror()')
+    assert js.eval('state.oracle.socket') is None
+    assert js.eval('state.oracle.attempts')==1
+    assert js.eval('timeoutCalls.length')>=2
+
+
+def test_manual_price_applies_from_button_without_affecting_model(js):
+    js.eval('$("reference-input").value="81,500.25";$("apply-reference").listeners.click()')
+    assert js.eval('state.oracle.reference.price')==81500.25
+    assert js.eval('MODEL')=='browser-candle-baseline-v1'
+    assert js.eval('state.records.length')==0
+
+
+def test_old_stored_reference_not_used_for_new_window(js):
+    oracle_state(js)
+    js.eval('saveReference(state.oracle.reference);state.oracle.reference=null;Date.now=()=>'+str((TS+300)*1000)+';loadReference();renderOracle()')
+    assert js.eval('state.oracle.reference') is None
+    assert js.eval('$("reference-direction").textContent')=='WAITING'
+
+
+@pytest.mark.parametrize('code',[
+    'state.lastCurrent=null','state.lastCurrent.source="https://other.example"',
+    'state.lastCurrent.raw.cryptoMarketConfig.twapLookbackSeconds=30',
+    'state.lastCurrent.raw.cryptoMarketConfig.twapEnabled=false',
+    'state.lastCurrent.raw.cryptoMarketConfig.asset="eth"',
+    'state.lastCurrent.raw.endDate="2020-01-01T00:00:00Z"',
+    'state.lastCurrent.raw.eventStartTime="2020-01-01T00:00:00Z"',
+    'state.lastCurrent.raw.slug="wrong-market"',
+])
+def test_price_comparison_requires_matching_market_rules(js,code):
+    oracle_state(js)
+    js.eval(code+';renderOracle()')
+    assert js.eval('$("reference-direction").textContent')=='WAITING'
+    assert 'market metadata' in js.eval('$("reference-detail").textContent')

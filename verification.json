@@ -1,6 +1,6 @@
 {
-  "tested_at": "2026-10-23T18:05:06.996769+00:00",
-  "automated_tests_passed": 51,
+  "tested_at": "2026-10-23T18:30:34.044460+00:00",
+  "automated_tests_passed": 117,
   "checks": {
     "coinbase_ticker": {
       "http_status": 200,
@@ -40,10 +40,39 @@
     },
     "live_baseline_computation": {
       "passed": true,
-      "feature_cutoff": 1792778640,
-      "target": 1792779000,
+      "feature_cutoff": 1792780140,
+      "target": 1792780500,
       "used_for_scoring": false,
       "notes": "API/logic smoke test, not an issued prospective forecast or accuracy evaluation."
+    },
+    "current_market_twap_rules": {
+      "passed": true,
+      "window": 1792780200,
+      "source": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
+      "lookback_seconds": 60
+    },
+    "live_polymarket_twap_snapshot": {
+      "passed": true,
+      "origin": "https://pbernoos.github.io",
+      "topic": "crypto_prices_twap_sixty",
+      "symbol": "btc/usd",
+      "window_s": 60,
+      "received_at": 1792780233.3680322,
+      "newest_point_timestamp": 1792780231,
+      "points": 58,
+      "opening_reference_available": true,
+      "not_a_browser_rendering_test": true
+    },
+    "exact_opening_reference_parity": {
+      "passed": true,
+      "window": 1792779600.0,
+      "feed_value": 81531.15249742479,
+      "polymarket_openPrice": 81531.15249742479,
+      "twap_enabled": true,
+      "lookback_seconds": 60,
+      "reference_api_browser_cors_allowed": false,
+      "static_site_calls_reference_api": false,
+      "limitation": "Only exact opening ticks accepted; paste current-window reference or wait for next opening if missing."
     },
     "local_static_http": {
       "passed": true,
@@ -56,6 +85,8 @@
   "limitations": [
     "CORS response headers checked from the expected Pages origin; no full browser was available.",
     "No performance, profitability or sustained collector claim.",
-    "Browser-only edition; no backend or shared history."
+    "Browser-only edition; no backend or shared history.",
+    "Missing opening reference requires manual current-window input or the next exact opening tick; no proxy fallback.",
+    "RTDS snapshots refresh every 10s; no sustained connection soak test."
   ]
 }

@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 const MODEL = "browser-candle-baseline-v1", KEY = "maagif-shadow-v1";
 const ORACLE = "https://data.chain.link/streams/btc-usd-twap-60s-streams";
 const MAX_RECORDS = 512, STALE = 20;
+const REFERENCE_KEY="maagif-reference-v1", TWAP_TOPIC="crypto_prices_twap_sixty";
 const now = () => Date.now() / 1000;
 const windowAt = t => Math.floor(t / 300) * 300;
 const finite = x => typeof x === "number" && Number.isFinite(x);
@@ -20,7 +21,168 @@ const money = x => finite(x) ? new Intl.NumberFormat("en-US", {style:"currency",
 const slug = t => `btc-updown-5m-${t}`;
 const state = {paused:false,busy:false,timer:null,price:null,books:null,draft:null,lastResolve:0,
   storageError:null,firstWindow:null,records:[],lastCurrent:null,lastCurrentAt:0,lastDraftAt:0,
-  chart:null,chartRange:60,chartRendered:null};
+  chart:null,chartRange:60,chartRendered:null,
+  oracle:{socket:null,heartbeat:null,retry:null,attempts:0,lastSnapshot:0,connectedAt:0,
+    latest:null,reference:null,status:"Connecting to Polymarket TWAP…",notice:null,inputWindow:null}};
+
+function validReference(r) {
+  return r && Number.isInteger(r.ts)&&r.ts>0&&r.ts%300===0&&finite(r.price)&&r.price>0&&
+    finite(r.captured_at)&&r.captured_at>=r.ts&&
+    ["manual","polymarket-twap-boundary"].includes(r.source);
+}
+function loadReference() {
+  try {
+    const raw=localStorage.getItem(REFERENCE_KEY);
+    if (!raw) return;
+    const r=JSON.parse(raw);
+    if(!validReference(r)) throw Error("Invalid saved reference");
+    if(r.ts===windowAt(now())) state.oracle.reference=r;
+  } catch(e) {state.oracle.notice="Saved reference unavailable; paste this window’s price to beat or wait for the next opening.";}
+}
+function saveReference(r) {
+  if(!validReference(r)||r.ts!==windowAt(now())) return false;
+  state.oracle.reference=r;
+  try {localStorage.setItem(REFERENCE_KEY,JSON.stringify(r));}
+  catch(e){state.oracle.notice="Reference works in this tab but could not be saved. Forecast journal was not changed.";}
+  return true;
+}
+function parseReferenceInput(raw) {
+  const s=String(raw).trim().replace(/^\$\s*/,"");
+  if(!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,18})?$/.test(s)) return null;
+  const price=Number(s.replaceAll(",",""));
+  return finite(price)&&price>0?price:null;
+}
+function setManualReference(raw,expectedWindow) {
+  const ts=windowAt(now()),o=state.oracle,price=parseReferenceInput(raw);
+  if(expectedWindow!==ts) {o.notice="The window changed. Copy the NEW window’s price to beat before applying it.";return false;}
+  if(o.reference?.ts===ts&&o.reference.source==="polymarket-twap-boundary") {
+    o.notice="An exact opening value is already available from the Polymarket TWAP feed.";return false;
+  }
+  if(price===null) {o.notice="Enter a positive USD price, for example 81,500.25. Percentages and odds are not the price to beat.";return false;}
+  o.notice="Manually copied reference; not independently verified. Confirm it matches the linked current Polymarket window.";
+  return saveReference({ts,price,source:"manual",captured_at:now(),input_text:String(raw).trim()});
+}
+function parseOracleMessage(m,received=now()) {
+  if(!m||m.topic!==TWAP_TOPIC||!["subscribe","update"].includes(m.type)) return [];
+  const p=m.payload;
+  if(!p||p.symbol!=="btc/usd"||p.window_s!==60) return [];
+  const rows=m.type==="subscribe"?p.data:[p];
+  if(!Array.isArray(rows)||rows.length>1200) return [];
+  return rows.filter(r=>r&&finite(r.value)&&r.value>0&&Number.isInteger(r.timestamp)&&
+    r.timestamp%1000===0&&r.timestamp/1000<=received+2&&r.timestamp/1000>=received-600)
+    .map(r=>({price:r.value,exchange_ts:r.timestamp/1000,received_at:received,
+      full_accuracy_value:typeof r.full_accuracy_value==="string"&&/^\d{1,80}$/.test(r.full_accuracy_value)?r.full_accuracy_value:null}))
+    .sort((a,b)=>a.exchange_ts-b.exchange_ts);
+}
+function ingestOracleMessage(m,received=now()) {
+  const points=parseOracleMessage(m,received),o=state.oracle,ts=windowAt(received);
+  if(!points.length) return false;
+  o.attempts=0;o.lastSnapshot=received;
+  for(const p of points) {
+    if(p.exchange_ts===ts) {
+      const previous=o.reference;
+      if(previous?.ts===ts&&previous.source==="manual") {
+        o.notice=Math.abs(previous.price-p.price)>.005?
+          "The automatic opening value differs from the pasted price. Using the exact Polymarket TWAP boundary value.":
+          "The pasted price agrees to the nearest cent with the automatic opening value. Using the exact feed value.";
+      }
+      saveReference({ts,price:p.price,source:"polymarket-twap-boundary",captured_at:received,
+        full_accuracy_value:p.full_accuracy_value});
+    }
+    if(!o.latest||p.exchange_ts>=o.latest.exchange_ts) o.latest=p;
+  }
+  o.status="Polymarket BTC/USD · 60-second TWAP";
+  return true;
+}
+function oracleMarketMatches(ts) {
+  const m=state.lastCurrent,c=m?.raw?.cryptoMarketConfig;
+  return Boolean(m&&m.ts===ts&&m.raw.slug===slug(ts)&&m.source===ORACLE&&
+    Date.parse(m.raw.eventStartTime)/1000===ts&&Date.parse(m.raw.endDate)/1000===ts+300&&
+    c?.asset==="btc"&&c.duration==="5m"&&c.twapEnabled===true&&c.twapLookbackSeconds===60);
+}
+function oracleComparison(t=now()) {
+  const o=state.oracle,ts=windowAt(t),r=o.reference,p=o.latest;
+  const reference=r&&validReference(r)&&r.ts===ts?r:null;
+  const fresh=!state.paused&&o.socket?.readyState===1&&p&&p.exchange_ts>=ts&&
+    p.exchange_ts<=t+2&&t-p.exchange_ts<=STALE&&t-p.received_at<=STALE;
+  if(!reference||!fresh||!oracleMarketMatches(ts)) return {reference,latest:fresh?p:null,direction:null,delta:null};
+  const delta=p.price-reference.price;
+  // Pasted display prices may be rounded to cents. Do not invent precision at equality.
+  const roundedTie=reference.source==="manual"&&Math.abs(delta)<.005;
+  return {reference,latest:p,delta,direction:roundedTie?"rounded-tie":delta>=0?"up":"down"};
+}
+function oracleSubscription(action="subscribe") {
+  return JSON.stringify({action,subscriptions:[{topic:TWAP_TOPIC,type:"update",filters:JSON.stringify({symbol:"btc/usd"})}]});
+}
+function stopOracle() {
+  const o=state.oracle;
+  clearInterval(o.heartbeat);clearTimeout(o.retry);o.heartbeat=null;o.retry=null;
+  const socket=o.socket;o.socket=null;
+  if(socket) {socket.onclose=null;socket.onerror=null;socket.onmessage=null;socket.close();}
+}
+function startOracle() {
+  const o=state.oracle;
+  if(state.paused||o.socket) return;
+  if(typeof WebSocket==="undefined") {o.status="WebSocket unavailable in this browser";return;}
+  clearTimeout(o.retry);o.retry=null;o.status="Connecting to Polymarket TWAP…";
+  let socket;
+  const reconnect=()=>{
+    if(o.socket!==socket) return;
+    stopOracle();o.status="TWAP connection unavailable — retrying; stale comparisons are hidden";
+    const delay=Math.min(30000,1000*2**Math.min(o.attempts++,5));
+    if(!state.paused) o.retry=setTimeout(startOracle,delay);
+    renderOracle();
+  };
+  try {socket=new WebSocket("wss://ws-live-data.polymarket.com");o.socket=socket;o.connectedAt=now();}
+  catch(e){o.status="Unable to open the public TWAP connection";o.retry=setTimeout(startOracle,10000);return;}
+  socket.onopen=()=>{
+    if(o.socket!==socket||state.paused) return;
+    socket.send(oracleSubscription());o.connectedAt=now();
+    let pulses=0;
+    o.heartbeat=setInterval(()=>{
+      if(o.socket!==socket||state.paused) return;
+      if(socket.readyState!==1) {reconnect();return;}
+      if(now()-Math.max(o.lastSnapshot,o.connectedAt)>30) {reconnect();return;}
+      try {
+        socket.send("PING");
+        // This topic supplied snapshots but no push ticks in live checks. Refresh the
+        // public subscription every 10s; no proxy, login, or alternate price source.
+        if(++pulses%2===0) {socket.send(oracleSubscription("unsubscribe"));socket.send(oracleSubscription());}
+      } catch(e){reconnect();}
+    },5000);
+  };
+  socket.onmessage=event=>{
+    if(o.socket!==socket||state.paused||typeof event.data!=="string"||event.data.length>300000) return;
+    try {if(ingestOracleMessage(JSON.parse(event.data))) renderOracle();} catch(e){/* Ignore acknowledgements and malformed messages. */}
+  };
+  socket.onerror=reconnect;socket.onclose=reconnect;
+  o.retry=setTimeout(()=>{if(o.socket===socket&&socket.readyState===0) reconnect();},12000);
+}
+function renderOracle() {
+  const t=now(),ts=windowAt(t),o=state.oracle,c=oracleComparison(t);
+  if(o.inputWindow!==ts) {
+    const previous=o.inputWindow;
+    o.inputWindow=ts;$("reference-input").value="";
+    if(previous!==null) o.notice=c.reference?"New five-minute window: reference updated for the linked market.":"New five-minute window: the previous reference no longer applies. Waiting for its exact opening value.";
+  }
+  const automatic=c.reference?.source==="polymarket-twap-boundary";
+  text("reference-window",`${localDate(ts)} · ${localTime(ts)}–${localTime(ts+300)} Tehran`);
+  text("price-to-beat",c.reference?money(c.reference.price):"—");
+  text("reference-source",c.reference?automatic?"Exact opening timestamp · Polymarket 60s TWAP feed":"MANUAL · copied from Polymarket; not independently verified":
+    "Opening value missing. Paste this window’s price to beat below, or keep this tab open for the next boundary.");
+  text("twap-price",c.latest?money(c.latest.price):"—");
+  text("twap-status",state.paused?"Paused":c.latest?`Polymarket 60s TWAP · ${Math.max(0,Math.floor(t-c.latest.exchange_ts))}s old · snapshots refreshed every 10s`:o.status+" · waiting for a fresh current-window value");
+  const label=c.direction==="rounded-tie"?"AT REFERENCE":c.direction?c.direction.toUpperCase():"WAITING";
+  text("reference-direction",label);
+  $("reference-direction").setAttribute("data-direction",["up","down"].includes(c.direction)?c.direction:"neutral");
+  text("reference-delta",c.delta===null?"—":`${c.delta>=0?"+":"−"}${money(Math.abs(c.delta))} vs price to beat`);
+  text("reference-detail",c.direction==="rounded-tie"?"Too close to a manually copied, potentially rounded reference to assign a reliable side.":
+    c.direction?`Current TWAP is ${c.direction==="up"?c.delta===0?"equal to":"above":"below"} this window’s reference. Live position only, NOT a prediction or an official result.`:
+      oracleMarketMatches(ts)?"Both a current-window reference and a fresh matching TWAP value are required. Coinbase is never used for this comparison.":
+        "Waiting for matching current-window market metadata: exact time range, BTC/USD, Chainlink source and 60s TWAP configuration. No side is assigned without it.");
+  text("reference-notice",o.notice||"");$("reference-notice").hidden=!o.notice;
+  $("reference-input").disabled=automatic;$("apply-reference").disabled=automatic||state.paused;
+}
 
 function validRecord(r) {
   return r && Number.isInteger(r.ts) && r.ts>0 && r.ts%300===0 && r.model===MODEL &&
@@ -261,7 +423,7 @@ function render() {
   if (state.storageError) {$("error").hidden=false;text("error",state.storageError);}
   text("connection",state.paused?"PAUSED":freshPrice?"LIVE PUBLIC DATA":"WAITING FOR DATA");
   $("connection").setAttribute("data-status",state.paused?"paused":freshPrice?"live":"waiting");
-  renderChart();renderJournal();
+  renderChart();renderJournal();renderOracle();
 }
 async function tick() {
   if (state.busy||state.paused) return;
@@ -297,8 +459,11 @@ async function tick() {
   }
 }
 $("refresh").addEventListener("click",()=>{if(!state.paused)tick();});
+$("apply-reference").addEventListener("click",()=>{setManualReference($("reference-input").value,state.oracle.inputWindow);renderOracle();});
+$("reference-input").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();setManualReference($("reference-input").value,state.oracle.inputWindow);renderOracle();}});
 $("pause").addEventListener("click",()=>{
   state.paused=!state.paused;clearTimeout(state.timer);
+  if(state.paused) stopOracle();else startOracle();
   text("pause",state.paused?"Resume this tab":"Pause this tab");render();if(!state.paused)tick();
 });
 $("export").addEventListener("click",()=>{
@@ -319,4 +484,4 @@ for(const button of document.querySelectorAll("[data-range]")) {
     renderChart();
   });
 }
-loadJournal();render();setInterval(render,1000);tick();
+loadJournal();loadReference();startOracle();render();setInterval(render,1000);tick();

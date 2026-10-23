@@ -4,6 +4,47 @@ Public, read-only **GitHub Pages** dashboard for BTC and Polymarket five-minute 
 
 ## Trading dashboard UI
 
+### Current-window Up / Down relative to Polymarket’s price to beat
+
+The prominent **price-to-beat panel** is a live comparison, not the candle
+forecast. It displays the current window’s opening reference, the matching
+Chainlink **60-second TWAP** carried by Polymarket, the dollar difference and
+UP (at/above) or DOWN (below). It never substitutes Coinbase spot or order-book
+odds. The window, source, BTC asset, duration and TWAP configuration must match
+current Gamma market metadata before a direction can appear. Only the separately
+confirmed official outcome can be used as a journal label.
+
+- Public WebSocket: `wss://ws-live-data.polymarket.com`, topic
+  `crypto_prices_twap_sixty`, type `update`, symbol `btc/usd`, payload `window_s=60`.
+  The connection accepted the GitHub Pages origin in live checks. PING every 5s;
+  unsubscribe/resubscribe every 10s to refresh snapshots because this topic
+  supplied snapshots but no streaming updates during the checks. Reconnects use
+  bounded backoff; pause closes the connection. Values older than 20s are hidden.
+- **Automatic opening reference:** only a point at the exact five-minute opening
+  timestamp is accepted. A real 2026-10-23 18:20 UTC boundary value
+  (81531.15249742479) matched Polymarket’s TWAP-enabled reference endpoint exactly.
+  No nearest-second, first-seen, Coinbase, interpolated or previous-window value
+  is substituted. The snapshot contains about one minute of history, so a late
+  visit can miss the opening value. Keep the tab open through the next boundary.
+- **Manual fallback:** expand “Missing opening price?” and copy this window’s
+  “Price to Beat” from the linked Polymarket page. This input is explicitly
+  **not independently verified**. It is limited to the current window, and
+  cannot override an exact automatic opening reference. An absolute difference
+  below half a cent is left neutral for manually copied/possibly rounded values.
+- The TWAP-enabled `https://polymarket.com/api/crypto/crypto-price` endpoint
+  returned the correct opening reference from our server-side check but sent
+  no `Access-Control-Allow-Origin` header for the Pages origin. The static site
+  therefore does **not** fetch that endpoint, use a CORS proxy or require hosting.
+- References are cached under a separate `maagif-reference-v1` local-storage key
+  and never apply to a different window. Forecast journal storage/schema/key and
+  the untrained model are unchanged. Live comparisons are not logged as forecasts
+  or used to claim accuracy. No historical forecast records are deleted.
+
+Feed transport and source parity were tested; a real-browser rendering/network
+test and long-running connection soak were not performed. Compare the reference
+with the linked Polymarket window before relying on it. No final outcome or
+profitability is guaranteed.
+
 ### Tehran time and forecast interpretation
 
 All human-readable times and dates use **Asia/Tehran** (Iran local time;
@@ -48,7 +89,8 @@ Expected website URL, once Pages is enabled and its build succeeds:
 
 **No demonstrated predictive edge. No financial advice or profitability claim.**
 Historical studies did not establish dependable benefit. Neither research model is deployed here.
-Coinbase is a price proxy; official strike/live Chainlink TWAP observations are not implemented.
+Coinbase remains a price proxy only for the separate spot display, historical
+chart and candle baseline; it does not drive the price-to-beat comparison.
 
 ## Important difference from the local Python app
 
@@ -60,7 +102,7 @@ synchronized. Scores are provisional, conditional on collected/resolved windows,
 not establish a reliable edge. The original Python shadow collector remains a separate app.
 
 No analytics or data uploads are included. The browser contacts the listed public market
-APIs, GitHub Pages, and any external links you choose to open; those services receive
+APIs, Polymarket’s public TWAP WebSocket, GitHub Pages, and any external links you choose to open; those services receive
 normal web-request metadata. The site never asks for API keys or wallet secrets.
 
 ## Enable GitHub Pages (repository owner)
