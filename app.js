@@ -8,7 +8,14 @@ const windowAt = t => Math.floor(t / 300) * 300;
 const finite = x => typeof x === "number" && Number.isFinite(x);
 const text = (id, value) => { $(id).textContent = value; };
 const pct = x => finite(x) ? `${(100*x).toFixed(1)}%` : "—";
-const utc = t => new Date(t*1000).toLocaleTimeString("en-GB", {timeZone:"UTC", hour:"2-digit", minute:"2-digit"});
+const DISPLAY_ZONE = "Asia/Tehran";
+const localTime = (t,seconds=false) => new Date(t*1000).toLocaleTimeString("en-GB", {
+  timeZone:DISPLAY_ZONE,hourCycle:"h23",hour:"2-digit",minute:"2-digit",...(seconds?{second:"2-digit"}:{})});
+function localDate(t) {
+  const parts=Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:DISPLAY_ZONE,
+    year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date(t*1000)).map(p=>[p.type,p.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 const money = x => finite(x) ? new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(x) : "—";
 const slug = t => `btc-updown-5m-${t}`;
 const state = {paused:false,busy:false,timer:null,price:null,books:null,draft:null,lastResolve:0,
@@ -175,12 +182,12 @@ function renderChart() {
   state.chartRendered=signature;
   $("price-path").setAttribute("d",g.line);$("chart-area").setAttribute("d",g.area);
   for(const key of ["high","mid","low","close"]) text(`chart-${key}`,money(g[key]));
-  text("chart-start",`${utc(g.first)} UTC`);text("chart-end",`${utc(g.last)} UTC`);
+  text("chart-start",`${localTime(g.first)} Tehran`);text("chart-end",`${localTime(g.last)} Tehran`);
   text("chart-change",`${g.change>=0?"+":""}${(g.change*100).toFixed(2)}%`);
   $("chart-change").setAttribute("class",g.change>0?"positive":g.change<0?"negative":"neutral");
   text("chart-change-note",`${g.count} completed 1m closes · not the live window return`);
-  text("chart-status",`Last candle closed ${utc(g.last)} UTC · newest minute omitted`);
-  text("chart-description",`${g.count} real Coinbase minute closes from ${utc(g.first)} to ${utc(g.last)} UTC. Last close ${money(g.close)}. Range change ${(g.change*100).toFixed(2)} percent. Not the official settlement feed.`);
+  text("chart-status",`Last candle closed ${localTime(g.last)} Tehran · newest minute omitted`);
+  text("chart-description",`${g.count} real Coinbase minute closes from ${localTime(g.first)} to ${localTime(g.last)} Tehran time. Last close ${money(g.close)}. Range change ${(g.change*100).toFixed(2)} percent. Not the official settlement feed.`);
 }
 function renderJournal() {
   const rows=state.records.slice().sort((a,b)=>b.ts-a.ts).slice(0,10);
@@ -189,17 +196,30 @@ function renderJournal() {
   $("journal-empty").hidden=rows.length>0;
   for(const r of rows) {
     const tr=document.createElement("tr"),resolved=r.up!==null&&r.ts+300<=now();
-    const cells=[new Date(r.ts*1000).toISOString().slice(0,16).replace("T"," "),
+    const cells=[`${localDate(r.ts)} ${localTime(r.ts)}`,
       r.p_up===.5?"NEUTRAL · tie scored Up":r.p_up>.5?"UP":"DOWN",pct(r.p_up),
       `${(r.ts-r.stored_at).toFixed(1)}s`,resolved?(r.up===1?"UP":"DOWN"):r.ts>now()?"Not started":"Pending official label"];
     for(const value of cells){const td=document.createElement("td");td.textContent=value;tr.appendChild(td);}
     body.appendChild(tr);
   }
 }
+function pairedMarketScores(resolved) {
+  const pairs=resolved.filter(r=>{
+    const b=r.context?.books?.up;
+    return finite(r.market_p_up)&&r.market_p_up>=0&&r.market_p_up<=1&&b&&
+      finite(b.bid)&&finite(b.ask)&&0<=b.bid&&b.bid<=b.ask&&b.ask<=1&&
+      Math.abs((b.bid+b.ask)/2-r.market_p_up)<1e-9&&
+      finite(b.received_at)&&b.received_at<=r.issued_at&&r.issued_at-b.received_at<=STALE&&
+      finite(b.exchange_ts)&&b.exchange_ts<=r.issued_at&&r.issued_at-b.exchange_ts<=STALE;
+  });
+  return pairs.length?{n:pairs.length,model:mean(pairs.map(r=>(r.p_up-r.up)**2)),
+    market:mean(pairs.map(r=>(r.market_p_up-r.up)**2))}:null;
+}
 function render() {
   const t=now(),ts=windowAt(t),remaining=ts+300-t;
   text("countdown",`${String(Math.floor(remaining/60)).padStart(2,"0")}:${String(Math.floor(remaining%60)).padStart(2,"0")}`);
-  text("window-range",`${utc(ts)}–${utc(ts+300)}`);
+  text("window-range",`${localTime(ts)}–${localTime(ts+300)}`);
+  text("local-clock",`${localDate(t)} · ${localTime(t,true)} Tehran`);
   $("window-progress").value=300-remaining;
   $("market-link").href=`https://polymarket.com/event/${slug(ts)}`;
   text("market-link",slug(ts));
@@ -222,7 +242,8 @@ function render() {
   $("draft-direction").setAttribute("data-direction",good?(d.p_up>.5?"up":d.p_up<.5?"down":"neutral"):"neutral");
   $("draft-meter").hidden=!good;
   if(good) $("draft-meter").value=d.p_up;
-  text("target",`Target: ${utc(ts+300)}–${utc(ts+600)} UTC. Draft is not a frozen forecast.`);
+  text("target",`Target: ${localDate(ts+300)} · ${localTime(ts+300)}–${localTime(ts+600)} Tehran. Next complete five-minute market window, not a rolling five minutes from now. Draft can change until saved before start.`);
+  text("draft-detail",good?`Experimental direction estimate for the target below, based only on completed candles. It can be wrong; no validated accuracy is available for this browser model.`:"Waiting for fresh, completed candles. No direction is invented when data is missing or stale.");
   const frozen=state.records.find(r=>r.ts===ts);
   text("frozen-direction",frozen?(frozen.p_up>=.5?"UP":"DOWN"):"NO FORECAST");
   $("frozen-direction").setAttribute("data-direction",frozen?(frozen.p_up>=.5?"up":"down"):"neutral");
@@ -232,6 +253,8 @@ function render() {
   const expected=state.firstWindow===null?0:Math.max(0,(ts-state.firstWindow)/300);
   const correct=done.filter(r=>(r.p_up>=.5)===Boolean(r.up)).length;
   const brier=n?mean(done.map(r=>(r.p_up-r.up)**2)):null;
+  const paired=pairedMarketScores(done);
+  text("market-comparison",paired?`Same ${paired.n} resolved windows with fresh pre-start quotes: model Brier ${paired.model.toFixed(4)} vs market midpoint ${paired.market.toFixed(4)}. Lower is better; this descriptive comparison does not prove a predictive edge.`:"No paired market comparison yet: needs official outcomes and timestamped fresh pre-start quotes. Missing or stale quotes are excluded, not guessed.");
   text("scores",n?`${n} officially resolved forecasts · accuracy ${pct(correct/n)} · Brier ${brier.toFixed(4)} (neutral 0.2500) · always-Up accuracy ${pct(mean(done.map(r=>r.up)))}`:"No scored outcomes yet. No accuracy or predictive advantage is claimed.");
   text("coverage",`${state.records.length} forecasts stored · ${eligible} eligible / ${expected} elapsed closed windows · coverage ${expected?pct(eligible/expected):"—"} · ${eligible-n} pending official labels. Startup partial windows and offline gaps count against coverage. Scores are provisional.`);
   text("journal-status",state.storageError?"STORAGE PAUSED":state.paused?"TAB PAUSED":"BROWSER-LOCAL");
@@ -267,7 +290,7 @@ async function tick() {
     for (const r of results) if(r.status==="rejected") issues.push(r.reason.message);
     $("error").hidden=!issues.length&&!state.storageError;
     text("error",state.storageError||issues.join(" · "));
-    text("observed",`Last update ${new Date().toLocaleTimeString("en-GB",{timeZone:"UTC"})} UTC · direct public APIs`);
+    text("observed",`Last update ${localTime(now(),true)} Tehran · direct public APIs`);
   } finally {
     state.busy=false;render();clearTimeout(state.timer);
     if(!state.paused) state.timer=setTimeout(tick,windowAt(now())+300-now()<=25?1000:10000);
@@ -279,9 +302,9 @@ $("pause").addEventListener("click",()=>{
   text("pause",state.paused?"Resume this tab":"Pause this tab");render();if(!state.paused)tick();
 });
 $("export").addEventListener("click",()=>{
-  const blob=new Blob([JSON.stringify({schema:1,model:MODEL,exported_at:now(),firstWindow:state.firstWindow,records:state.records},null,2)],{type:"application/json"});
+  const blob=new Blob([JSON.stringify({schema:1,model:MODEL,display_timezone:DISPLAY_ZONE,timestamp_format:"Unix seconds; timezone-independent",exported_at:now(),firstWindow:state.firstWindow,records:state.records},null,2)],{type:"application/json"});
   const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;
-  a.download=`maagif-shadow-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  a.download=`maagif-shadow-${localDate(now())}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!state.paused)tick();});
 for(const button of document.querySelectorAll("[data-range]")) {

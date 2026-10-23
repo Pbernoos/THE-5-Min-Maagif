@@ -143,8 +143,8 @@ def test_early_draft_cutoff_remains_in_past(js):
 
 def test_static_site_paths_and_no_secret_patterns():
     html=(ROOT/'index.html').read_text()
-    assert 'href="./style.css?v=2"' in html and 'src="./app.js?v=2"' in html
-    assert 'href="./terminal.css?v=2"' in html
+    assert 'href="./style.css?v=3"' in html and 'src="./app.js?v=3"' in html
+    assert 'href="./terminal.css?v=3"' in html
     assert 'http-equiv="Content-Security-Policy"' in html
     assert 'No demonstrated predictive edge' in html
     js=(ROOT/'app.js').read_text()
@@ -236,3 +236,57 @@ def test_html_has_unique_ids_and_all_literal_js_targets():
     targets=set(re.findall(r'(?:\$|text)\("([a-z][a-z-]+)"',source))
     assert targets<=set(ids)
     assert '<svg' in html and '<table' in html and 'aria-pressed' in html
+
+
+@pytest.mark.parametrize('stamp,expected',[
+    ('2026-10-23T17:57:22Z','21:27'),
+    ('2026-06-23T17:57:22Z','21:27'),
+    ('2026-10-23T21:00:00Z','00:30'),
+])
+def test_tehran_time_uses_iana_zone_not_device_zone(js,stamp,expected):
+    assert js.eval(f'localTime(Date.parse("{stamp}")/1000)')==expected
+
+
+def test_tehran_date_rollover(js):
+    assert js.eval('localDate(Date.parse("2026-10-23T21:00:00Z")/1000)')=='2026-10-24'
+
+
+def test_timezone_does_not_shift_real_market_boundaries(js):
+    ts=js.eval('windowAt(Date.parse("2026-10-23T17:57:22Z")/1000)')
+    assert js.eval(f'new Date({ts}*1000).toISOString()')=='2026-10-23T17:55:00.000Z'
+    assert js.eval(f'localTime({ts})')=='21:25'
+
+
+def test_forecast_target_is_next_complete_window_in_tehran(js):
+    js.eval('Date.now=()=>Date.parse("2026-10-23T17:57:22Z");render()')
+    label=js.eval('$("target").textContent')
+    assert '21:30–21:35 Tehran' in label and 'not a rolling five minutes' in label
+
+
+def test_journal_dates_also_use_tehran(js):
+    js.eval(f'state.records=[{json.dumps(record())}];renderJournal()')
+    assert js.eval('$("journal-rows").children[0].children[0].textContent')=='2026-10-23 19:10'
+
+
+def test_paired_market_comparison_excludes_missing_quotes(js):
+    r=record();r['up']=1
+    assert js.eval(f'pairedMarketScores([{json.dumps(r)}])') is None
+
+
+def paired_record():
+    r=record();r.update(up=1,market_p_up=.5,context={'books':{'up':{
+        'bid':.4,'ask':.6,'received_at':TS-11,'exchange_ts':TS-12}}})
+    return r
+
+
+def test_paired_brier_uses_identical_valid_cohort(js):
+    r=paired_record()
+    score=value(js,f'pairedMarketScores([{json.dumps(r)}])')
+    assert score['n']==1 and score['market']==.25
+    assert score['model']==pytest.approx((.55-1)**2)
+
+
+@pytest.mark.parametrize('field,v',[('exchange_ts',TS-100),('received_at',TS-5),('exchange_ts',None)])
+def test_paired_comparison_rejects_stale_future_or_untimestamped_quotes(js,field,v):
+    r=paired_record();r['context']['books']['up'][field]=v
+    assert js.eval(f'pairedMarketScores([{json.dumps(r)}])') is None

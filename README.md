@@ -4,6 +4,26 @@ Public, read-only **GitHub Pages** dashboard for BTC and Polymarket five-minute 
 
 ## Trading dashboard UI
 
+### Tehran time and forecast interpretation
+
+All human-readable times and dates use **Asia/Tehran** (Iran local time;
+UTC+03:30 under current rules), including the live clock, chart, forecast target,
+market window, journal dates and export filename. IANA timezone conversion handles
+local date rollover. Market identifiers, five-minute boundaries, API timestamps and
+saved Unix seconds remain timezone-independent: no artificial offset is added to
+the market itself. The clock still depends on your device's time being correct;
+this change is timezone formatting, not external clock synchronization.
+
+The direction estimate targets the **next full five-minute market window**, not
+five minutes starting at the moment you read it. The exact Tehran target appears
+underneath. It is not a guaranteed Up/Down result, and the model has not been
+replaced or claimed to be more accurate by this UI update.
+
+The journal now also compares model Brier with pre-start Up quote midpoint Brier
+on the same officially resolved windows, only when stored quote timestamps are
+fresh, precede issuance, and match the stored midpoint. Missing/stale/untimestamped
+quotes are excluded. This is a descriptive evaluation, not proof of an edge.
+
 The dark, responsive terminal includes a real Coinbase minute-close chart with
 15m / 1h / 2h range controls, a five-minute countdown/progress indicator,
 live BTC price, separate Up/Down public quote cards, experimental forecast panels,

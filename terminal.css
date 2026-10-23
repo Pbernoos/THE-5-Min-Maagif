@@ -1,4 +1,5 @@
 /* Trading-terminal presentation. All data and forecasts remain read-only. */
+#local-clock{display:block;margin-top:7px;font-variant-numeric:tabular-nums;grid-column:1 / -1}
 :root{color-scheme:dark;--bg:#080c14;--panel:#101622;--text:#edf1fa;--muted:#8f9eb7;--border:#232d40;--amber:#f2b867;--green:#55deb2;--red:#ff819d;--blue:#8ba5ff}
 html{scroll-behavior:smooth;scroll-padding-top:24px}
 body{background:radial-gradient(ellipse at 45% 0%,#152038 0%,transparent 48%),var(--bg);font-size:14px;line-height:1.5}
