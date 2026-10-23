@@ -12,7 +12,8 @@ const utc = t => new Date(t*1000).toLocaleTimeString("en-GB", {timeZone:"UTC", h
 const money = x => finite(x) ? new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(x) : "—";
 const slug = t => `btc-updown-5m-${t}`;
 const state = {paused:false,busy:false,timer:null,price:null,books:null,draft:null,lastResolve:0,
-  storageError:null,firstWindow:null,records:[],lastCurrent:null,lastCurrentAt:0,lastDraftAt:0};
+  storageError:null,firstWindow:null,records:[],lastCurrent:null,lastCurrentAt:0,lastDraftAt:0,
+  chart:null,chartRange:60,chartRendered:null};
 
 function validRecord(r) {
   return r && Number.isInteger(r.ts) && r.ts>0 && r.ts%300===0 && r.model===MODEL &&
@@ -110,6 +111,7 @@ async function prepare(ts) {
   const history=await candlesFor(ts,cutoff);
   const result=baseline(history),captured=now();
   state.draft={...result,ts,captured_at:captured,feature_cutoff:cutoff,candles:history};
+  state.chart={candles:history,received_at:captured};
   state.lastDraftAt=captured;
 }
 async function freeze(ts) {
@@ -147,10 +149,58 @@ async function resolve() {
     }
   }
 }
+function chartGeometry(candles,count) {
+  const rows=candles.slice(-count);
+  if (rows.length<2 || rows.some(c=>!finite(c.close)||c.close<=0||!finite(c.ts))) return null;
+  const values=rows.map(c=>c.close),min=Math.min(...values),max=Math.max(...values);
+  const pad=(max-min)*.1 || Math.max(max*.001,.01),low=min-pad,high=max+pad;
+  const points=rows.map((c,i)=>[16+694*i/(rows.length-1),280-260*(c.close-low)/(high-low)]);
+  const line=points.map(([x,y],i)=>`${i?"L":"M"}${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
+  return {line,area:`${line} L710,280 L16,280 Z`,low,high,mid:(low+high)/2,
+    change:values.at(-1)/values[0]-1,close:values.at(-1),first:rows[0].ts+60,last:rows.at(-1).ts+60,count:rows.length};
+}
+function renderChart() {
+  const chart=state.chart,fresh=!state.paused&&chart&&now()-chart.received_at<=150;
+  const g=fresh?chartGeometry(chart.candles,state.chartRange):null;
+  $("chart-empty").hidden=Boolean(g);
+  if (!g) {
+    text("chart-empty",state.paused?"Chart paused":chart?"Historical candles are stale — waiting for a fresh update":"Waiting for real Coinbase candles…");
+    for (const id of ["price-path","chart-area"]) $(id).setAttribute("d","");
+    for (const id of ["chart-high","chart-mid","chart-low","chart-close","chart-start","chart-end","chart-change"]) text(id,"—");
+    text("chart-description","No fresh historical candles available. No simulated chart is displayed.");
+    state.chartRendered=null;return;
+  }
+  const signature=`${chart.received_at}:${state.chartRange}`;
+  if (signature===state.chartRendered) return;
+  state.chartRendered=signature;
+  $("price-path").setAttribute("d",g.line);$("chart-area").setAttribute("d",g.area);
+  for(const key of ["high","mid","low","close"]) text(`chart-${key}`,money(g[key]));
+  text("chart-start",`${utc(g.first)} UTC`);text("chart-end",`${utc(g.last)} UTC`);
+  text("chart-change",`${g.change>=0?"+":""}${(g.change*100).toFixed(2)}%`);
+  $("chart-change").setAttribute("class",g.change>0?"positive":g.change<0?"negative":"neutral");
+  text("chart-change-note",`${g.count} completed 1m closes · not the live window return`);
+  text("chart-status",`Last candle closed ${utc(g.last)} UTC · newest minute omitted`);
+  text("chart-description",`${g.count} real Coinbase minute closes from ${utc(g.first)} to ${utc(g.last)} UTC. Last close ${money(g.close)}. Range change ${(g.change*100).toFixed(2)} percent. Not the official settlement feed.`);
+}
+function renderJournal() {
+  const rows=state.records.slice().sort((a,b)=>b.ts-a.ts).slice(0,10);
+  const body=$("journal-rows");
+  body.replaceChildren();
+  $("journal-empty").hidden=rows.length>0;
+  for(const r of rows) {
+    const tr=document.createElement("tr"),resolved=r.up!==null&&r.ts+300<=now();
+    const cells=[new Date(r.ts*1000).toISOString().slice(0,16).replace("T"," "),
+      r.p_up===.5?"NEUTRAL · tie scored Up":r.p_up>.5?"UP":"DOWN",pct(r.p_up),
+      `${(r.ts-r.stored_at).toFixed(1)}s`,resolved?(r.up===1?"UP":"DOWN"):r.ts>now()?"Not started":"Pending official label"];
+    for(const value of cells){const td=document.createElement("td");td.textContent=value;tr.appendChild(td);}
+    body.appendChild(tr);
+  }
+}
 function render() {
   const t=now(),ts=windowAt(t),remaining=ts+300-t;
   text("countdown",`${String(Math.floor(remaining/60)).padStart(2,"0")}:${String(Math.floor(remaining%60)).padStart(2,"0")}`);
   text("window-range",`${utc(ts)}–${utc(ts+300)}`);
+  $("window-progress").value=300-remaining;
   $("market-link").href=`https://polymarket.com/event/${slug(ts)}`;
   text("market-link",slug(ts));
   const freshPrice=!state.paused && state.price && t-state.price.received_at<=STALE && t-state.price.exchange_ts<=STALE && state.price.exchange_ts<=t+5;
@@ -161,13 +211,21 @@ function render() {
     const fresh=!state.paused&&b&&t-b.received_at<=STALE&&(b.exchange_ts===null||(finite(b.exchange_ts)&&t-b.exchange_ts<=STALE&&b.exchange_ts<=t+5));
     text(`${side}-quote`,fresh&&finite(b.bid)&&finite(b.ask)?`${b.bid.toFixed(3)} / ${b.ask.toFixed(3)}`:"—");
     text(`${side}-spread`,fresh&&finite(b.bid)&&finite(b.ask)?`Spread ${(b.ask-b.bid).toFixed(3)} · indicative only`:"No fresh two-sided book");
+    const midpoint=fresh&&finite(b.bid)&&finite(b.ask)?(b.bid+b.ask)/2:null;
+    text(`${side}-mid`,pct(midpoint));
+    $(`${side}-meter`).hidden=midpoint===null;
+    if(midpoint!==null) $(`${side}-meter`).value=midpoint;
   }
   const d=state.draft,good=!state.paused&&d&&d.ts===ts+300&&t-d.captured_at<=75;
   text("draft-direction",good?(d.p_up>.5?"UP":d.p_up<.5?"DOWN":"NEUTRAL"):"WAITING");
   text("draft-p",good?pct(d.p_up):"—");
+  $("draft-direction").setAttribute("data-direction",good?(d.p_up>.5?"up":d.p_up<.5?"down":"neutral"):"neutral");
+  $("draft-meter").hidden=!good;
+  if(good) $("draft-meter").value=d.p_up;
   text("target",`Target: ${utc(ts+300)}–${utc(ts+600)} UTC. Draft is not a frozen forecast.`);
   const frozen=state.records.find(r=>r.ts===ts);
   text("frozen-direction",frozen?(frozen.p_up>=.5?"UP":"DOWN"):"NO FORECAST");
+  $("frozen-direction").setAttribute("data-direction",frozen?(frozen.p_up>=.5?"up":"down"):"neutral");
   text("frozen-detail",frozen?`${pct(frozen.p_up)} heuristic P(Up), saved ${(ts-frozen.stored_at).toFixed(1)}s before start. It cannot update after start. Not calibrated.`:"No saved pre-start forecast for this window. Later observations are never backfilled.");
   const done=state.records.filter(r=>r.up!==null&&r.ts+300<=t),n=done.length;
   const eligible=state.records.filter(r=>r.ts+300<=t).length;
@@ -179,6 +237,8 @@ function render() {
   text("journal-status",state.storageError?"STORAGE PAUSED":state.paused?"TAB PAUSED":"BROWSER-LOCAL");
   if (state.storageError) {$("error").hidden=false;text("error",state.storageError);}
   text("connection",state.paused?"PAUSED":freshPrice?"LIVE PUBLIC DATA":"WAITING FOR DATA");
+  $("connection").setAttribute("data-status",state.paused?"paused":freshPrice?"live":"waiting");
+  renderChart();renderJournal();
 }
 async function tick() {
   if (state.busy||state.paused) return;
@@ -224,4 +284,16 @@ $("export").addEventListener("click",()=>{
   a.download=`maagif-shadow-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 });
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!state.paused)tick();});
+for(const button of document.querySelectorAll("[data-range]")) {
+  button.addEventListener("click",()=>{
+    const range=Number(button.getAttribute("data-range"));
+    if(![15,60,120].includes(range)) return;
+    state.chartRange=range;
+    for(const other of document.querySelectorAll("[data-range]")) {
+      const active=other===button;
+      other.setAttribute("aria-pressed",String(active));other.classList.toggle("active",active);
+    }
+    renderChart();
+  });
+}
 loadJournal();render();setInterval(render,1000);tick();

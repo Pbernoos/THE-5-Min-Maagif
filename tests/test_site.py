@@ -10,9 +10,15 @@ TS=1792770000
 STUB=r'''
 Date.now=()=>1792769990000;
 globalThis.setTimeout=()=>1;globalThis.clearTimeout=()=>{};globalThis.setInterval=()=>1;
-class Element {constructor(){this.textContent='';this.hidden=false;this.href='';this.listeners={};}addEventListener(k,v){this.listeners[k]=v;}click(){}}
+class Element {
+ constructor(){this.textContent='';this.hidden=false;this.href='';this.listeners={};this.attrs={};this.children=[];this.classList={toggle:()=>{}};}
+ addEventListener(k,v){this.listeners[k]=v;}click(){}
+ setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k]??null;}
+ appendChild(c){this.children.push(c);return c;}replaceChildren(...c){this.children=c;}
+}
 const elements={};
-const document={hidden:false,getElementById:id=>elements[id]||(elements[id]=new Element()),createElement:()=>new Element(),addEventListener:()=>{}};
+const rangeButtons=[15,60,120].map(n=>{const e=new Element();e.setAttribute('data-range',n);return e;});
+const document={hidden:false,getElementById:id=>elements[id]||(elements[id]=new Element()),createElement:()=>new Element(),addEventListener:()=>{},querySelectorAll:s=>s==='[data-range]'?rangeButtons:[]};
 const storage={};
 const localStorage={getItem:k=>storage[k]||null,setItem:(k,v)=>{storage[k]=v;}};
 const fetch=()=>new Promise(()=>{});
@@ -137,9 +143,96 @@ def test_early_draft_cutoff_remains_in_past(js):
 
 def test_static_site_paths_and_no_secret_patterns():
     html=(ROOT/'index.html').read_text()
-    assert 'href="./style.css"' in html and 'src="./app.js"' in html
+    assert 'href="./style.css?v=2"' in html and 'src="./app.js?v=2"' in html
+    assert 'href="./terminal.css?v=2"' in html
     assert 'http-equiv="Content-Security-Policy"' in html
     assert 'No demonstrated predictive edge' in html
     js=(ROOT/'app.js').read_text()
     assert 'innerHTML' not in js and 'github_pat_' not in js
     assert 'credentials:"omit"' in js
+
+
+def test_chart_has_no_synthetic_startup_points(js):
+    assert js.eval('$("price-path").getAttribute("d")')==''
+    assert not js.eval('$("chart-empty").hidden')
+
+
+def test_chart_flat_prices_have_finite_geometry(js):
+    rows=[{'ts':TS-60*i,'close':100} for i in range(60,0,-1)]
+    g=value(js,f'chartGeometry({json.dumps(rows)},60)')
+    assert g['change']==0 and g['low']<100<g['high']
+    assert 'NaN' not in g['line'] and 'Infinity' not in g['line']
+
+
+@pytest.mark.parametrize('count',[15,60,120])
+def test_chart_range_uses_real_available_rows(js,count):
+    rows=[{'ts':TS-60*(120-i),'close':100+i} for i in range(120)]
+    g=value(js,f'chartGeometry({json.dumps(rows)},{count})')
+    assert g['count']==count and g['close']==219
+    assert g['last']==TS
+
+
+def test_chart_change_is_candle_range_not_fabricated_window_return(js):
+    assert js.eval('chartGeometry([{ts:1,close:100},{ts:61,close:110}],60).change')==pytest.approx(.1)
+
+
+def test_chart_empty_or_invalid_data_rejected(js):
+    assert js.eval('chartGeometry([],60)') is None
+    assert js.eval('chartGeometry([{ts:1,close:100},{ts:61,close:-1}],60)') is None
+
+
+def test_stale_chart_is_suppressed(js):
+    js.eval('state.chart={received_at:now()-151,candles:[{ts:1,close:100},{ts:61,close:110}]};renderChart()')
+    assert js.eval('$("price-path").getAttribute("d")')==''
+    assert js.eval('$("chart-close").textContent')=='—'
+
+
+def test_range_buttons_change_accessible_selection(js):
+    js.eval('rangeButtons[0].listeners.click()')
+    assert js.eval('state.chartRange')==15
+    assert js.eval('rangeButtons[0].getAttribute("aria-pressed")')=='true'
+    assert js.eval('rangeButtons[1].getAttribute("aria-pressed")')=='false'
+
+
+def test_new_journal_is_empty_not_demo_results(js):
+    assert js.eval('$("journal-rows").children.length')==0
+    assert not js.eval('$("journal-empty").hidden')
+
+
+def test_journal_renders_saved_prestart_record_without_promoting_pending_label(js):
+    js.eval(f'state.records=[{json.dumps(record())}];renderJournal()')
+    assert js.eval('$("journal-rows").children.length')==1
+    assert js.eval('$("journal-rows").children[0].children[4].textContent')=='Not started'
+
+
+def test_display_limit_does_not_remove_saved_records(js):
+    records=[]
+    for i in range(12):
+        r=record();r.update(ts=TS-i*300,issued_at=TS-i*300-10,stored_at=TS-i*300-9)
+        records.append(r)
+    js.eval(f'state.records={json.dumps(records)};renderJournal()')
+    assert js.eval('$("journal-rows").children.length')==10
+    assert js.eval('state.records.length')==12
+
+
+def test_midpoint_cards_hidden_when_book_is_stale(js):
+    js.eval('state.books={ts:windowAt(now()),up:{bid:.4,ask:.6,received_at:now()-30,exchange_ts:null}};render()')
+    assert js.eval('$("up-mid").textContent')=='—'
+    assert js.eval('$("up-meter").hidden')
+
+
+def test_midpoint_cards_are_quotes_not_model_predictions(js):
+    js.eval('state.books={ts:windowAt(now()),up:{bid:.4,ask:.6,received_at:now(),exchange_ts:null}};render()')
+    assert js.eval('$("up-mid").textContent')=='50.0%'
+    assert not js.eval('$("up-meter").hidden')
+
+
+def test_html_has_unique_ids_and_all_literal_js_targets():
+    import re
+    html=(ROOT/'index.html').read_text()
+    ids=re.findall(r'\bid="([^"]+)"',html)
+    assert len(ids)==len(set(ids))
+    source=(ROOT/'app.js').read_text()
+    targets=set(re.findall(r'(?:\$|text)\("([a-z][a-z-]+)"',source))
+    assert targets<=set(ids)
+    assert '<svg' in html and '<table' in html and 'aria-pressed' in html

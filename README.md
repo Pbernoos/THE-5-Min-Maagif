@@ -2,6 +2,18 @@
 
 Public, read-only **GitHub Pages** dashboard for BTC and Polymarket five-minute markets.
 
+## Trading dashboard UI
+
+The dark, responsive terminal includes a real Coinbase minute-close chart with
+15m / 1h / 2h range controls, a five-minute countdown/progress indicator,
+live BTC price, separate Up/Down public quote cards, experimental forecast panels,
+and the ten most recent saved forecasts. Export retains all saved records.
+The chart deliberately omits the newest minute and is **not tick-by-tick**;
+chart-range change is not the current market window's return. Empty/stale data
+stays empty rather than becoming demo prices or simulated results.
+Quote midpoints and uncalibrated model probabilities are labeled separately.
+The UI update does not alter the model, saved journal format, or trading permissions.
+
 Expected website URL, once Pages is enabled and its build succeeds:
 **https://pbernoos.github.io/THE-5-Min-Maagif/**
 

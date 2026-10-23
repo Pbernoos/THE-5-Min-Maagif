@@ -1,6 +1,6 @@
 {
-  "tested_at": "2026-10-23T16:17:55.974584+00:00",
-  "automated_tests_passed": 24,
+  "tested_at": "2026-10-23T17:38:01.955860+00:00",
+  "automated_tests_passed": 39,
   "checks": {
     "coinbase_ticker": {
       "http_status": 200,
@@ -22,12 +22,26 @@
       "http_status": 200,
       "allow_origin": "*"
     },
+    "real_candle_chart_ranges": {
+      "passed": true,
+      "ranges_minutes": [
+        15,
+        60,
+        120
+      ],
+      "synthetic_data": false
+    },
     "live_baseline_computation": {
       "passed": true,
-      "feature_cutoff": 1792772160,
-      "target": 1792772400,
+      "feature_cutoff": 1792777020,
+      "target": 1792777200,
       "used_for_scoring": false,
       "notes": "API/logic smoke test, not an issued prospective forecast or accuracy evaluation."
+    },
+    "local_static_http": {
+      "passed": true,
+      "paths": 4,
+      "server_stopped_after_test": true
     }
   },
   "browser_rendering_tested": false,
