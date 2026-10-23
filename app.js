@@ -1,0 +1,227 @@
+"use strict";
+const $ = id => document.getElementById(id);
+const MODEL = "browser-candle-baseline-v1", KEY = "maagif-shadow-v1";
+const ORACLE = "https://data.chain.link/streams/btc-usd-twap-60s-streams";
+const MAX_RECORDS = 512, STALE = 20;
+const now = () => Date.now() / 1000;
+const windowAt = t => Math.floor(t / 300) * 300;
+const finite = x => typeof x === "number" && Number.isFinite(x);
+const text = (id, value) => { $(id).textContent = value; };
+const pct = x => finite(x) ? `${(100*x).toFixed(1)}%` : "—";
+const utc = t => new Date(t*1000).toLocaleTimeString("en-GB", {timeZone:"UTC", hour:"2-digit", minute:"2-digit"});
+const money = x => finite(x) ? new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(x) : "—";
+const slug = t => `btc-updown-5m-${t}`;
+const state = {paused:false,busy:false,timer:null,price:null,books:null,draft:null,lastResolve:0,
+  storageError:null,firstWindow:null,records:[],lastCurrent:null,lastCurrentAt:0,lastDraftAt:0};
+
+function validRecord(r) {
+  return r && Number.isInteger(r.ts) && r.ts>0 && r.ts%300===0 && r.model===MODEL &&
+    finite(r.p_up) && r.p_up>=0 && r.p_up<=1 && finite(r.issued_at) && finite(r.stored_at) &&
+    r.ts-20<=r.issued_at && r.issued_at<=r.stored_at && r.stored_at<r.ts &&
+    finite(r.feature_cutoff) && r.feature_cutoff<=r.ts-60 &&
+    (r.up===null || r.up===0 || r.up===1);
+}
+function loadJournal() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return;
+    const j = JSON.parse(raw);
+    if (!Array.isArray(j.records) || j.records.length>MAX_RECORDS || !j.records.every(validRecord) ||
+        new Set(j.records.map(r=>r.ts)).size!==j.records.length || !Number.isInteger(j.firstWindow) || j.firstWindow%300!==0) throw Error("Journal validation failed; existing data was not changed.");
+    state.records=j.records; state.firstWindow=j.firstWindow;
+  } catch(e) { state.storageError=`Local storage unavailable: ${e.message}. Export any existing records; capture is paused.`; }
+}
+function persist() {
+  if (state.storageError) return false;
+  try {
+    localStorage.setItem(KEY,JSON.stringify({schema:1,model:MODEL,firstWindow:state.firstWindow,records:state.records}));
+    return true;
+  } catch(e) { state.storageError=`Storage write failed: ${e.message}. New forecast capture paused; nothing auto-deleted.`; return false; }
+}
+async function getJSON(url) {
+  const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),8000);
+  try {
+    const r=await fetch(url,{signal:controller.signal,mode:"cors",credentials:"omit",cache:"no-store",referrerPolicy:"no-referrer"});
+    if (!r.ok) throw Error(`Public API returned HTTP ${r.status}`);
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+function array(x) { return typeof x==="string" ? JSON.parse(x) : x; }
+function parseMarket(data, ts) {
+  if (!Array.isArray(data)) throw Error("Invalid market response");
+  const event=data.find(e=>e.slug===slug(ts));
+  const m=event?.markets?.find(m=>m.slug===slug(ts));
+  if (!m) throw Error("Market is not published or is unavailable");
+  const names=array(m.outcomes).map(s=>String(s).trim().toLowerCase());
+  const ids=array(m.clobTokenIds);
+  if (names.length!==2 || new Set(names).size!==2 || !names.includes("up") || !names.includes("down") ||
+      ids.length!==2 || !ids.every(x=>/^\d{1,128}$/.test(String(x)))) throw Error("Invalid Up/Down market mapping");
+  const prices=array(m.outcomePrices || "[]").map(Number);
+  return {raw:m,ts,tokens:Object.fromEntries(names.map((n,i)=>[n,String(ids[i])])),
+    prices:Object.fromEntries(names.map((n,i)=>[n,prices[i]])),
+    source:m.resolutionSource || event.resolutionSource || ""};
+}
+async function market(ts) {
+  return parseMarket(await getJSON(`https://gamma-api.polymarket.com/events?slug=${slug(ts)}`),ts);
+}
+function parseBook(b,received) {
+  function levels(side) {
+    if (!Array.isArray(b[side])) throw Error("Invalid book levels");
+    return b[side].map(r=>({price:Number(r.price),size:Number(r.size)})).filter(r=>finite(r.price)&&r.price>=0&&r.price<=1&&finite(r.size)&&r.size>0);
+  }
+  const bids=levels("bids").sort((a,b)=>b.price-a.price).slice(0,20);
+  const asks=levels("asks").sort((a,b)=>a.price-b.price).slice(0,20);
+  const bid=bids[0]?.price,ask=asks[0]?.price;
+  if (finite(bid)&&finite(ask)&&bid>ask) throw Error("Crossed market book");
+  return {bid,ask,bids,asks,received_at:received,exchange_ts:b.timestamp ? Number(b.timestamp)/1000 : null};
+}
+async function booksFor(m) {
+  const result=await Promise.allSettled(["up","down"].map(async side=>
+    [side,parseBook(await getJSON(`https://clob.polymarket.com/book?token_id=${m.tokens[side]}`),now())]));
+  return Object.fromEntries(result.filter(r=>r.status==="fulfilled").map(r=>r.value));
+}
+function parseCandles(data,ts,cutoff=ts-60) {
+  if (!Array.isArray(data)) throw Error("Invalid candle response");
+  const candles=data.map(r=>({ts:Number(r[0]),low:Number(r[1]),high:Number(r[2]),open:Number(r[3]),close:Number(r[4]),volume:Number(r[5])}))
+    .filter(c=>c.ts>=cutoff-120*60 && c.ts+60<=cutoff).sort((a,b)=>a.ts-b.ts);
+  if (candles.length!==120 || candles.at(-1).ts+60!==cutoff ||
+      candles.some((c,i)=>!Number.isInteger(c.ts)||c.ts%60!==0||![c.open,c.close,c.high,c.low,c.volume].every(finite)||c.low<=0||c.high<c.low||c.volume<0||c.open<c.low||c.open>c.high||c.close<c.low||c.close>c.high||(i&&c.ts-candles[i-1].ts!==60))) throw Error("Missing, duplicate or invalid historical candles; no forecast made");
+  return candles;
+}
+async function candlesFor(ts,cutoff=ts-60) {
+  const start=new Date((cutoff-120*60)*1000).toISOString(),end=new Date(cutoff*1000).toISOString();
+  return parseCandles(await getJSON(`https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),ts,cutoff);
+}
+const mean = a => a.reduce((s,x)=>s+x,0)/a.length;
+function baseline(candles) {
+  const prices=candles.map(c=>c.close),returns=prices.slice(1).map((x,i)=>Math.log(x/prices[i]));
+  const mu=mean(returns),sd=Math.sqrt(mean(returns.map(x=>(x-mu)**2)));
+  const ema=n=>prices.reduce((v,x)=>v+(2/(n+1))*(x-v),prices[0]);
+  const momentum=sd>0 ? Math.log(prices.at(-1)/prices.at(-4))/(sd*Math.sqrt(3)) : 0;
+  const trend=sd>0 ? Math.log(ema(9)/ema(21))/sd : 0;
+  const changes=prices.slice(-14).map((x,i)=>x-prices[prices.length-15+i]);
+  const gain=mean(changes.map(x=>Math.max(0,x))),loss=mean(changes.map(x=>Math.max(0,-x)));
+  const rsi=gain+loss ? 100*gain/(gain+loss) : 50;
+  const score=.5*Math.tanh(momentum)+.3*Math.tanh(trend)+.2*((rsi-50)/50);
+  return {p_up:.5+.15*Math.tanh(score),momentum,trend,rsi};
+}
+async function prepare(ts) {
+  const cutoff=Math.min(ts-60,Math.floor(now()/60)*60-60);
+  const history=await candlesFor(ts,cutoff);
+  const result=baseline(history),captured=now();
+  state.draft={...result,ts,captured_at:captured,feature_cutoff:cutoff,candles:history};
+  state.lastDraftAt=captured;
+}
+async function freeze(ts) {
+  if (state.storageError || state.records.some(r=>r.ts===ts) || !(0<ts-now()&&ts-now()<=20)) return;
+  if (state.records.length>=MAX_RECORDS) { state.storageError="Local journal reached 512 forecasts. Capture paused; export your data. No records deleted."; return; }
+  // Fresh fetch AFTER entering the eligible pre-start interval. Drafts are never backfilled.
+  const [history,context]=await Promise.all([candlesFor(ts),market(ts).then(async m=>({market:m.raw,books:await booksFor(m)})).catch(e=>({issue:e.message,books:{}}))]);
+  const model=baseline(history),issued=now();
+  if (state.paused) return;
+  if (!(ts-20<=issued && issued<ts)) throw Error("Collection crossed boundary; late forecast was not saved");
+  const stored=now();
+  if (stored>=ts) return;
+  const up=context.books.up;
+  const record={model:MODEL,ts,issued_at:issued,stored_at:stored,feature_cutoff:ts-60,p_up:model.p_up,
+    market_p_up:up&&finite(up.bid)&&finite(up.ask) ? (up.bid+up.ask)/2 : null,
+    candles:history,context,up:null,resolved_at:null};
+  state.records.push(record);
+  if (!persist()) state.records.pop(); // This uncommitted record was never a saved forecast.
+  state.draft={...model,ts,captured_at:issued,feature_cutoff:ts-60};
+}
+async function resolve() {
+  if (state.storageError || now()-state.lastResolve<30) return;
+  state.lastResolve=now();
+  const pending=state.records.filter(r=>r.up===null&&r.ts+360<=now());
+  // Round-robin pending labels so an old unavailable market cannot starve new ones.
+  const batch=pending.slice(state.resolveOffset||0,(state.resolveOffset||0)+2);
+  state.resolveOffset=pending.length ? ((state.resolveOffset||0)+2)%pending.length : 0;
+  for (const r of batch) {
+    const m=await market(r.ts);
+    if (m.raw.closed===true && String(m.raw.umaResolutionStatus).toLowerCase()==="resolved" && m.source===ORACLE &&
+        [m.prices.up,m.prices.down].sort().join(",")==="0,1") {
+      const old={up:r.up,resolved_at:r.resolved_at,resolution:r.resolution};
+      r.up=m.prices.up;r.resolved_at=now();r.resolution=m.raw;
+      if (!persist()) Object.assign(r,old);
+    }
+  }
+}
+function render() {
+  const t=now(),ts=windowAt(t),remaining=ts+300-t;
+  text("countdown",`${String(Math.floor(remaining/60)).padStart(2,"0")}:${String(Math.floor(remaining%60)).padStart(2,"0")}`);
+  text("window-range",`${utc(ts)}–${utc(ts+300)}`);
+  $("market-link").href=`https://polymarket.com/event/${slug(ts)}`;
+  text("market-link",slug(ts));
+  const freshPrice=!state.paused && state.price && t-state.price.received_at<=STALE && t-state.price.exchange_ts<=STALE && state.price.exchange_ts<=t+5;
+  text("price",freshPrice?money(state.price.price):"—");
+  text("price-age",freshPrice?`Coinbase · received ${Math.floor(t-state.price.received_at)}s ago`:"Stale / paused / unavailable");
+  for (const side of ["up","down"]) {
+    const b=state.books?.ts===ts?state.books[side]:null;
+    const fresh=!state.paused&&b&&t-b.received_at<=STALE&&(b.exchange_ts===null||(finite(b.exchange_ts)&&t-b.exchange_ts<=STALE&&b.exchange_ts<=t+5));
+    text(`${side}-quote`,fresh&&finite(b.bid)&&finite(b.ask)?`${b.bid.toFixed(3)} / ${b.ask.toFixed(3)}`:"—");
+    text(`${side}-spread`,fresh&&finite(b.bid)&&finite(b.ask)?`Spread ${(b.ask-b.bid).toFixed(3)} · indicative only`:"No fresh two-sided book");
+  }
+  const d=state.draft,good=!state.paused&&d&&d.ts===ts+300&&t-d.captured_at<=75;
+  text("draft-direction",good?(d.p_up>.5?"UP":d.p_up<.5?"DOWN":"NEUTRAL"):"WAITING");
+  text("draft-p",good?pct(d.p_up):"—");
+  text("target",`Target: ${utc(ts+300)}–${utc(ts+600)} UTC. Draft is not a frozen forecast.`);
+  const frozen=state.records.find(r=>r.ts===ts);
+  text("frozen-direction",frozen?(frozen.p_up>=.5?"UP":"DOWN"):"NO FORECAST");
+  text("frozen-detail",frozen?`${pct(frozen.p_up)} heuristic P(Up), saved ${(ts-frozen.stored_at).toFixed(1)}s before start. It cannot update after start. Not calibrated.`:"No saved pre-start forecast for this window. Later observations are never backfilled.");
+  const done=state.records.filter(r=>r.up!==null&&r.ts+300<=t),n=done.length;
+  const eligible=state.records.filter(r=>r.ts+300<=t).length;
+  const expected=state.firstWindow===null?0:Math.max(0,(ts-state.firstWindow)/300);
+  const correct=done.filter(r=>(r.p_up>=.5)===Boolean(r.up)).length;
+  const brier=n?mean(done.map(r=>(r.p_up-r.up)**2)):null;
+  text("scores",n?`${n} officially resolved forecasts · accuracy ${pct(correct/n)} · Brier ${brier.toFixed(4)} (neutral 0.2500) · always-Up accuracy ${pct(mean(done.map(r=>r.up)))}`:"No scored outcomes yet. No accuracy or predictive advantage is claimed.");
+  text("coverage",`${state.records.length} forecasts stored · ${eligible} eligible / ${expected} elapsed closed windows · coverage ${expected?pct(eligible/expected):"—"} · ${eligible-n} pending official labels. Startup partial windows and offline gaps count against coverage. Scores are provisional.`);
+  text("journal-status",state.storageError?"STORAGE PAUSED":state.paused?"TAB PAUSED":"BROWSER-LOCAL");
+  if (state.storageError) {$("error").hidden=false;text("error",state.storageError);}
+  text("connection",state.paused?"PAUSED":freshPrice?"LIVE PUBLIC DATA":"WAITING FOR DATA");
+}
+async function tick() {
+  if (state.busy||state.paused) return;
+  state.busy=true;
+  const issues=[];
+  try {
+    const ts=windowAt(now()),target=ts+300;
+    if (state.firstWindow===null&&!state.storageError) {state.firstWindow=ts;persist();}
+    // Freeze first: live display fetches must not consume the short pre-start interval.
+    if (target-now()<=20) try {await freeze(target);} catch(e) {issues.push(`Pre-start: ${e.message}`);}
+    const results=await Promise.allSettled([
+      getJSON("https://api.exchange.coinbase.com/products/BTC-USD/ticker").then(r=>{
+        const price=Number(r.price),exchange_ts=Date.parse(r.time)/1000;
+        if (!finite(price)||price<=0||!finite(exchange_ts)) throw Error("Invalid price timestamp");
+        state.price={price,exchange_ts,received_at:now()};
+      }),
+      (async()=>{
+        if (!state.lastCurrent||state.lastCurrent.ts!==ts||now()-state.lastCurrentAt>30) {
+          state.lastCurrent=await market(ts);state.lastCurrentAt=now();
+        }
+        state.books={ts,...await booksFor(state.lastCurrent)};
+      })(),
+      (async()=>{if (!state.draft||state.draft.ts!==target||now()-state.lastDraftAt>60) await prepare(target);})(),
+      resolve()
+    ]);
+    for (const r of results) if(r.status==="rejected") issues.push(r.reason.message);
+    $("error").hidden=!issues.length&&!state.storageError;
+    text("error",state.storageError||issues.join(" · "));
+    text("observed",`Last update ${new Date().toLocaleTimeString("en-GB",{timeZone:"UTC"})} UTC · direct public APIs`);
+  } finally {
+    state.busy=false;render();clearTimeout(state.timer);
+    if(!state.paused) state.timer=setTimeout(tick,windowAt(now())+300-now()<=25?1000:10000);
+  }
+}
+$("refresh").addEventListener("click",()=>{if(!state.paused)tick();});
+$("pause").addEventListener("click",()=>{
+  state.paused=!state.paused;clearTimeout(state.timer);
+  text("pause",state.paused?"Resume this tab":"Pause this tab");render();if(!state.paused)tick();
+});
+$("export").addEventListener("click",()=>{
+  const blob=new Blob([JSON.stringify({schema:1,model:MODEL,exported_at:now(),firstWindow:state.firstWindow,records:state.records},null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;
+  a.download=`maagif-shadow-${new Date().toISOString().slice(0,10)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&!state.paused)tick();});
+loadJournal();render();setInterval(render,1000);tick();

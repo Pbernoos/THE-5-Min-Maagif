@@ -1,0 +1,40 @@
+{
+  "tested_at": "2026-10-23T16:17:55.974584+00:00",
+  "automated_tests_passed": 24,
+  "checks": {
+    "coinbase_ticker": {
+      "http_status": 200,
+      "allow_origin": "*"
+    },
+    "gamma_market": {
+      "http_status": 200,
+      "allow_origin": "*"
+    },
+    "clob_up": {
+      "http_status": 200,
+      "allow_origin": "*"
+    },
+    "clob_down": {
+      "http_status": 200,
+      "allow_origin": "*"
+    },
+    "coinbase_candles": {
+      "http_status": 200,
+      "allow_origin": "*"
+    },
+    "live_baseline_computation": {
+      "passed": true,
+      "feature_cutoff": 1792772160,
+      "target": 1792772400,
+      "used_for_scoring": false,
+      "notes": "API/logic smoke test, not an issued prospective forecast or accuracy evaluation."
+    }
+  },
+  "browser_rendering_tested": false,
+  "browser_network_tested": false,
+  "limitations": [
+    "CORS response headers checked from the expected Pages origin; no full browser was available.",
+    "No performance, profitability or sustained collector claim.",
+    "Browser-only edition; no backend or shared history."
+  ]
+}
