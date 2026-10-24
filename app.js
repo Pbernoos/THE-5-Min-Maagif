@@ -220,25 +220,38 @@ function renderOracle() {
   if(o.inputWindow!==ts) {
     const previous=o.inputWindow;
     o.inputWindow=ts;$("reference-input").value="";
+    $("reference-controls").open=!c.reference;
     if(previous!==null) o.notice=c.reference?"New five-minute window: reference updated for the linked market.":"New five-minute window: the previous reference no longer applies. Waiting for its exact opening value.";
   }
   const automatic=c.reference?.source==="polymarket-twap-boundary";
+  const matches=oracleMarketMatches(ts),live=Boolean(c.latest&&matches);
+  const needsReference=!c.reference;
+  $("reference-market-link").href=`https://polymarket.com/event/${slug(ts)}`;
+  $("reference-action").hidden=!needsReference;
+  text("reference-action",live?"TWAP is live, but this window’s opening reference was missed. Enter its price to beat below to enable Up/Down. Or keep this tab open through the next window for another automatic capture attempt.":
+    "Opening reference missing. You can enter this window’s price to beat below. Up/Down also requires a fresh matching TWAP feed and verified market metadata.");
+  if(automatic) $("reference-controls").open=false;
   text("reference-window",`${localDate(ts)} · ${localTime(ts)}–${localTime(ts+300)} Tehran`);
   text("price-to-beat",c.reference?money(c.reference.price):"—");
   text("reference-source",c.reference?automatic?"Exact opening timestamp · Polymarket 60s TWAP feed":"MANUAL · copied from Polymarket; not independently verified":
     "Opening value missing. Paste this window’s price to beat below, or keep this tab open for the next boundary.");
   text("twap-price",c.latest?money(c.latest.price):"—");
   text("twap-status",state.paused?"Paused":c.latest?`Polymarket 60s TWAP · ${Math.max(0,Math.floor(t-c.latest.exchange_ts))}s old · snapshots refreshed every 10s`:o.status+" · waiting for a fresh current-window value");
-  const label=c.direction==="rounded-tie"?"AT REFERENCE":c.direction?c.direction.toUpperCase():"WAITING";
+  const label=c.direction==="rounded-tie"?"AT REFERENCE":c.direction?c.direction.toUpperCase():live&&needsReference?"REFERENCE NEEDED":"WAITING";
   text("reference-direction",label);
+  $("reference-direction").setAttribute("data-needs-reference",live&&needsReference);
   $("reference-direction").setAttribute("data-direction",["up","down"].includes(c.direction)?c.direction:"neutral");
   text("reference-delta",c.delta===null?"—":`${c.delta>=0?"+":"−"}${money(Math.abs(c.delta))} vs price to beat`);
   text("reference-detail",c.direction==="rounded-tie"?"Too close to a manually copied, potentially rounded reference to assign a reliable side.":
     c.direction?`Current TWAP is ${c.direction==="up"?c.delta===0?"equal to":"above":"below"} this window’s reference. Live position only, NOT a prediction or an official result.`:
-      oracleMarketMatches(ts)?"Both a current-window reference and a fresh matching TWAP value are required. Coinbase is never used for this comparison.":
+      live&&needsReference?"The chart is receiving live data. Up/Down is unavailable only because the opening price to beat is missing; the current TWAP cannot substitute for that opening price.":
+      matches?state.paused?"Paused. Resume this tab to receive a fresh TWAP value; no live side is assigned while paused.":
+        "TWAP is stale, disconnected, or not yet received. No live side is assigned until the matching feed is fresh. Coinbase is never substituted.":
         "Waiting for matching current-window market metadata: exact time range, BTC/USD, Chainlink source and 60s TWAP configuration. No side is assigned without it.");
   text("reference-notice",o.notice||"");$("reference-notice").hidden=!o.notice;
   $("reference-input").disabled=automatic;$("apply-reference").disabled=automatic||state.paused;
+  text("connection",state.paused?"PAUSED":live?needsReference?"LIVE · REFERENCE NEEDED":"TWAP LIVE":matches?"TWAP UNAVAILABLE":"VERIFYING MARKET");
+  $("connection").setAttribute("data-status",state.paused?"paused":live?"live":"waiting");
   renderOracleChart(t,c);
 }
 

@@ -36,6 +36,9 @@
 .reference-form input:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .reference-form input:disabled,.reference-form button:disabled{opacity:.5;cursor:not-allowed}
 .reference-notice{color:var(--amber)}
+.reference-action{padding:13px 15px;border:1px solid #765a2c;background:#281f14;border-radius:8px;color:var(--amber);font-size:12px;line-height:1.8}
+.reference-verdict .verdict[data-needs-reference="true"]{font-size:clamp(18px,2.2vw,28px);color:var(--amber);letter-spacing:-.4px}
+.reference-controls[open]{padding-bottom:6px}
 @media(max-width:700px){.reference-grid{grid-template-columns:1fr 1fr;gap:18px}.reference-verdict{grid-column:1 / -1}.reference-panel .panel-title{flex-wrap:wrap}}
 @media(max-width:420px){.reference-grid{grid-template-columns:1fr}.reference-verdict{grid-column:auto}.reference-form input{width:100%}.reference-form label{width:100%}}
 #local-clock{display:block;margin-top:7px;font-variant-numeric:tabular-nums;grid-column:1 / -1}

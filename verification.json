@@ -1,6 +1,6 @@
 {
-  "tested_at": "2026-10-24T00:40:11.961225+00:00",
-  "automated_tests_passed": 135,
+  "tested_at": "2026-10-24T02:26:05.040666+00:00",
+  "automated_tests_passed": 140,
   "checks": {
     "coinbase_ticker": {
       "http_status": 200,
@@ -40,14 +40,14 @@
     },
     "live_baseline_computation": {
       "passed": true,
-      "feature_cutoff": 1792802340,
-      "target": 1792802700,
+      "feature_cutoff": 1792808700,
+      "target": 1792809000,
       "used_for_scoring": false,
       "notes": "API/logic smoke test, not an issued prospective forecast or accuracy evaluation."
     },
     "current_market_twap_rules": {
       "passed": true,
-      "window": 1792802400,
+      "window": 1792808700,
       "source": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
       "lookback_seconds": 60
     },
@@ -57,18 +57,18 @@
       "topic": "crypto_prices_twap_sixty",
       "symbol": "btc/usd",
       "window_s": 60,
-      "received_at": 1792802410.770959,
-      "newest_point_timestamp": 1792802409,
-      "points": 57,
+      "received_at": 1792808763.621168,
+      "newest_point_timestamp": 1792808762,
+      "points": 59,
       "opening_reference_available": false,
       "not_a_browser_rendering_test": true
     },
     "live_current_window_twap_chart": {
       "passed": true,
-      "window": 1792802400,
-      "observed_seconds": 8,
-      "first_observation": 1792802402,
-      "last_observation": 1792802409,
+      "window": 1792808700,
+      "observed_seconds": 59,
+      "first_observation": 1792808704,
+      "last_observation": 1792808762,
       "fixed_axis_seconds": 300,
       "real_snapshot_no_synthetic_history": true,
       "browser_rendering_tested": false
@@ -88,12 +88,32 @@
       "passed": true,
       "paths": 4,
       "server_stopped_after_test": true
+    },
+    "chromium_live_feed_candidate": {
+      "passed": true,
+      "duration_seconds": 23,
+      "production_origin": true,
+      "candidate_assets_served_locally": true,
+      "real_api_and_websocket_traffic": true,
+      "page_errors": [],
+      "failed_requests": [],
+      "automatic_opening_reference_observed": true
+    },
+    "chromium_ui_regressions": {
+      "passed": true,
+      "deterministic_synthetic_fixtures_not_live_prices": true,
+      "viewport_widths": [
+        1280,
+        390
+      ],
+      "manual_reference_and_pause_resume_tested": true,
+      "no_horizontal_overflow": true
     }
   },
-  "browser_rendering_tested": false,
-  "browser_network_tested": false,
+  "browser_rendering_tested": true,
+  "browser_network_tested": true,
   "limitations": [
-    "CORS response headers checked from the expected Pages origin; no full browser was available.",
+    "Chromium only: desktop/mobile viewports, not all browser engines or user regions.",
     "No performance, profitability or sustained collector claim.",
     "Browser-only edition; no backend or shared history.",
     "Missing opening reference requires manual current-window input or the next exact opening tick; no proxy fallback.",

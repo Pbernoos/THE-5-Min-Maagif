@@ -143,8 +143,8 @@ def test_early_draft_cutoff_remains_in_past(js):
 
 def test_static_site_paths_and_no_secret_patterns():
     html=(ROOT/'index.html').read_text()
-    assert 'href="./style.css?v=5"' in html and 'src="./app.js?v=5"' in html
-    assert 'href="./terminal.css?v=5"' in html
+    assert 'href="./style.css?v=6"' in html and 'src="./app.js?v=6"' in html
+    assert 'href="./terminal.css?v=6"' in html
     assert 'http-equiv="Content-Security-Policy"' in html
     assert 'No demonstrated predictive edge' in html
     js=(ROOT/'app.js').read_text()
@@ -340,7 +340,8 @@ def test_price_to_beat_is_not_coinbase_proxy(js):
 def test_comparison_suppressed_when_reference_or_live_price_not_valid(js,code):
     oracle_state(js)
     js.eval(code+';renderOracle()')
-    assert js.eval('$("reference-direction").textContent')=='WAITING'
+    expected='REFERENCE NEEDED' if code in ['state.oracle.reference=null',f'state.oracle.reference.ts={TS-300}'] else 'WAITING'
+    assert js.eval('$("reference-direction").textContent')==expected
     assert js.eval('oracleComparison().direction') is None
 
 
@@ -679,3 +680,45 @@ def test_live_chart_is_primary_and_forecasts_are_collapsed():
     assert 'id="twap-chart"' not in supporting
     assert html.index('id="reference-heading"')<html.index('id="twap-chart"')<html.index('id="draft-direction"')
     assert 'aria-labelledby="twap-chart-title twap-chart-description"' in html
+
+
+def test_late_arrival_shows_reference_needed_not_generic_waiting(js):
+    oracle_state(js)
+    js.eval('state.oracle.reference=null;renderOracle()')
+    assert js.eval('$("reference-direction").textContent')=='REFERENCE NEEDED'
+    assert js.eval('$("connection").textContent')=='LIVE · REFERENCE NEEDED'
+    assert js.eval('$("reference-controls").open') is True
+    assert js.eval('$("reference-action").hidden') is False
+    assert 'chart is receiving live data' in js.eval('$("reference-detail").textContent')
+    assert js.eval('$("reference-market-link").href')==f'https://polymarket.com/event/btc-updown-5m-{TS}'
+
+
+def test_manual_input_resolves_reference_needed_without_fabricating_side(js):
+    oracle_state(js,price=99)
+    js.eval('state.oracle.reference=null;renderOracle();setManualReference("100",state.oracle.inputWindow);renderOracle()')
+    assert js.eval('$("reference-direction").textContent')=='DOWN'
+    assert js.eval('$("reference-action").hidden') is True
+    assert js.eval('$("connection").textContent')=='TWAP LIVE'
+    assert 'MANUAL' in js.eval('$("reference-source").textContent')
+
+
+def test_automatic_reference_closes_manual_form(js):
+    oracle_state(js)
+    js.eval('renderOracle()')
+    assert js.eval('$("reference-controls").open') is False
+    assert js.eval('$("reference-input").disabled') is True
+
+
+def test_connection_badge_is_not_fooled_by_live_coinbase(js):
+    oracle_state(js)
+    js.eval('state.price={price:90000,exchange_ts:now(),received_at:now()};state.oracle.socket.readyState=3;render()')
+    assert js.eval('$("connection").textContent')=='TWAP UNAVAILABLE'
+    assert js.eval('$("reference-direction").textContent')=='WAITING'
+
+
+def test_new_window_reopens_missing_reference_form(js):
+    oracle_state(js)
+    js.eval(f'renderOracle();Date.now=()=>{TS+300}000;renderOracle()')
+    assert js.eval('$("reference-controls").open') is True
+    assert js.eval('$("reference-action").hidden') is False
+    assert js.eval('$("reference-market-link").href')==f'https://polymarket.com/event/btc-updown-5m-{TS+300}'

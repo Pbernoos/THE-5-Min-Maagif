@@ -9,6 +9,22 @@ matching TWAP, difference, live side, countdown, and a **TWAP versus price-to-be
 chart**. Coinbase history and the unchanged experimental forecasts are inside
 the collapsed **Supporting context** section; opening it does not change capture.
 
+### If Up/Down is not showing
+
+- **LIVE · REFERENCE NEEDED** means the TWAP chart is working but this window's
+  opening reference is missing, usually after a late visit. The entry form is
+  automatically expanded for a missing reference. Follow **Open this exact
+  Polymarket window**, copy its **Price to Beat**, and press **Use for this window**.
+  The live TWAP, Coinbase price, or outcome odds are not substitutes.
+- Alternatively, keep the tab active through the next boundary for another exact
+  automatic capture attempt. This depends on feed availability and browser
+  scheduling; automatic capture is not guaranteed.
+- **TWAP UNAVAILABLE** means the matching feed is stale, disconnected, or not yet
+  received. **VERIFYING MARKET** means current market metadata is not yet verified.
+  The header reflects the primary TWAP feed, not merely a working Coinbase ticker.
+- **PAUSED** requires resuming the tab. A manual reference never bypasses freshness
+  or source checks. No missing side is invented.
+
 ### Current-window TWAP chart
 
 - Fixed five-minute horizontal axis in Tehran time; dashed amber line is the
@@ -51,7 +67,7 @@ confirmed official outcome can be used as a journal label.
   No nearest-second, first-seen, Coinbase, interpolated or previous-window value
   is substituted. The snapshot contains about one minute of history, so a late
   visit can miss the opening value. Keep the tab open through the next boundary.
-- **Manual fallback:** expand “Missing opening price?” and copy this window’s
+- **Manual fallback:** use “Set this window’s price to beat” and copy this window’s
   “Price to Beat” from the linked Polymarket page. This input is explicitly
   **not independently verified**. It is limited to the current window, and
   cannot override an exact automatic opening reference. An absolute difference
@@ -156,5 +172,7 @@ python -m pytest tests -q
 ```
 
 Tests exercise JavaScript logic with an embedded engine and DOM stub, not real browser
-rendering. Browser restrictions can differ from server-side CORS header checks.
+rendering. Delivery checks additionally include actual Chromium desktop/mobile UI
+fixtures and a bounded real-feed browser smoke test; these are not cross-browser,
+all-region, or sustained-availability guarantees.
 See `verification.json` for delivery checks and limitations.
