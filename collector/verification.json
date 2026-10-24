@@ -1,0 +1,24 @@
+{
+  "version": "1.1.0",
+  "tests_passed": 52,
+  "real_smoke_database_audit": {
+    "quick_check": "ok",
+    "record_hashes_verified": 53,
+    "labels_revalidated": 0
+  },
+  "historical_smoke_dataset": {
+    "export": "/workspace/polymarket_source/delivery-toolkit-v11/smoke-causal-dataset.jsonl",
+    "windows": 3,
+    "complete_windows": 0,
+    "complete_labeled_windows": 0,
+    "note": "Chronological evaluation still required; no accuracy or trading edge claimed"
+  },
+  "original_collector_unchanged": true,
+  "source_access": "SQLite mode=ro; no data migration",
+  "windows_execution_tested": false,
+  "user_database_accessed": false,
+  "model_trained": false,
+  "website_changed": false,
+  "accuracy_improvement_demonstrated": false,
+  "always_on_service_installed": false
+}

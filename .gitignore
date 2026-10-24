@@ -9,3 +9,13 @@ data/
 logs/
 *.sqlite3
 *.sqlite3-*
+
+# Local collector runtime, exports and backups (source remains tracked)
+collector/.venv/
+collector/__pycache__/
+collector/data/
+collector/*.sqlite3
+collector/*.sqlite3-wal
+collector/*.sqlite3-shm
+collector/*.jsonl
+collector/.env

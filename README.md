@@ -176,3 +176,27 @@ rendering. Delivery checks additionally include actual Chromium desktop/mobile U
 fixtures and a bounded real-feed browser smoke test; these are not cross-browser,
 all-region, or sustained-availability guarantees.
 See `verification.json` for delivery checks and limitations.
+
+## Local data collector and reliability toolkit
+
+The separate [`collector/`](collector/) directory collects public BTC five-minute
+Polymarket books and the matching metadata-checked 60-second TWAP feed on an awake
+computer. It does not run on GitHub Pages, place orders, or replace the website's
+prediction model. No accuracy improvement is claimed.
+
+- **Already collecting?** Follow [`collector/UPGRADE.md`](collector/UPGRADE.md).
+  Copy only `tools.py` beside your existing `collector.py`; preserve your `data`
+  folder and running collector. Run the health check in a second PowerShell:
+  `.\.venv\Scripts\python.exe tools.py health`.
+- **Fresh install:** see [`collector/README.md`](collector/README.md). The optional
+  `collector/start-windows.cmd` checks `python` and `py` and uses a local venv.
+  Do not start a second collector on the same database.
+- The toolkit adds read-only health diagnostics, SQLite-aware verified backups,
+  integrity/official-label evidence checks and causal pre-start dataset exports.
+- Tests: from `collector/`, run `python -m unittest -v test_collector test_tools`.
+  52 automated checks passed on Linux; Windows execution and a long-running soak
+  have not been verified here. No new model accuracy result is implied.
+
+Runtime databases, backups, exports, virtual environments and credentials must
+stay local; do not commit them to this public repository.
+
