@@ -4,6 +4,30 @@ Public, read-only **GitHub Pages** dashboard for BTC and Polymarket five-minute 
 
 ## Trading dashboard UI
 
+The main view now centers on the current Polymarket window: reference, current
+matching TWAP, difference, live side, countdown, and a **TWAP versus price-to-beat
+chart**. Coinbase history and the unchanged experimental forecasts are inside
+the collapsed **Supporting context** section; opening it does not change capture.
+
+### Current-window TWAP chart
+
+- Fixed five-minute horizontal axis in Tehran time; dashed amber line is the
+  automatic or explicitly labeled manual price to beat. The vertical scale
+  includes both observations and the reference, even when they are far apart.
+- Only validated Polymarket BTC/USD 60s TWAP observations received by this tab
+  are drawn, including the short initial snapshot. Points are sorted and
+  deduplicated by feed timestamp; a line joins observations at most three seconds
+  apart. Missing history is never reconstructed or filled from Coinbase.
+- History is held in memory only, bounded to the current window's 300 possible
+  one-second timestamps, and resets at the next boundary or page reload.
+- Matching current-window market metadata is required to display the chart.
+  If the opening reference is missing, real observations can still be plotted
+  without a reference line or Up/Down comparison.
+- Paused, stale, or disconnected historical curves are dimmed and labeled as
+  historical observations. The live side and current price retain their strict
+  freshness checks; a visible historical curve does not mean a fresh comparison.
+- This is not a continuous tick feed, forecast, or official resolved result.
+
 ### Current-window Up / Down relative to Polymarket’s price to beat
 
 The prominent **price-to-beat panel** is a live comparison, not the candle
@@ -19,7 +43,8 @@ confirmed official outcome can be used as a journal label.
   The connection accepted the GitHub Pages origin in live checks. PING every 5s;
   unsubscribe/resubscribe every 10s to refresh snapshots because this topic
   supplied snapshots but no streaming updates during the checks. Reconnects use
-  bounded backoff; pause closes the connection. Values older than 20s are hidden.
+  bounded backoff; pause closes the connection. Live values older than 20s are
+  hidden; the new chart retains clearly labeled historical observations.
 - **Automatic opening reference:** only a point at the exact five-minute opening
   timestamp is accepted. A real 2026-10-23 18:20 UTC boundary value
   (81531.15249742479) matched Polymarket’s TWAP-enabled reference endpoint exactly.

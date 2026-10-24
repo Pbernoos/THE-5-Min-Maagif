@@ -1,6 +1,6 @@
 {
-  "tested_at": "2026-10-23T18:30:34.044460+00:00",
-  "automated_tests_passed": 117,
+  "tested_at": "2026-10-24T00:40:11.961225+00:00",
+  "automated_tests_passed": 135,
   "checks": {
     "coinbase_ticker": {
       "http_status": 200,
@@ -40,14 +40,14 @@
     },
     "live_baseline_computation": {
       "passed": true,
-      "feature_cutoff": 1792780140,
-      "target": 1792780500,
+      "feature_cutoff": 1792802340,
+      "target": 1792802700,
       "used_for_scoring": false,
       "notes": "API/logic smoke test, not an issued prospective forecast or accuracy evaluation."
     },
     "current_market_twap_rules": {
       "passed": true,
-      "window": 1792780200,
+      "window": 1792802400,
       "source": "https://data.chain.link/streams/btc-usd-twap-60s-streams",
       "lookback_seconds": 60
     },
@@ -57,11 +57,21 @@
       "topic": "crypto_prices_twap_sixty",
       "symbol": "btc/usd",
       "window_s": 60,
-      "received_at": 1792780233.3680322,
-      "newest_point_timestamp": 1792780231,
-      "points": 58,
-      "opening_reference_available": true,
+      "received_at": 1792802410.770959,
+      "newest_point_timestamp": 1792802409,
+      "points": 57,
+      "opening_reference_available": false,
       "not_a_browser_rendering_test": true
+    },
+    "live_current_window_twap_chart": {
+      "passed": true,
+      "window": 1792802400,
+      "observed_seconds": 8,
+      "first_observation": 1792802402,
+      "last_observation": 1792802409,
+      "fixed_axis_seconds": 300,
+      "real_snapshot_no_synthetic_history": true,
+      "browser_rendering_tested": false
     },
     "exact_opening_reference_parity": {
       "passed": true,

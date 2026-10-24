@@ -23,7 +23,7 @@ const state = {paused:false,busy:false,timer:null,price:null,books:null,draft:nu
   storageError:null,firstWindow:null,records:[],lastCurrent:null,lastCurrentAt:0,lastDraftAt:0,
   chart:null,chartRange:60,chartRendered:null,
   oracle:{socket:null,heartbeat:null,retry:null,attempts:0,lastSnapshot:0,connectedAt:0,
-    latest:null,reference:null,status:"Connecting to Polymarket TWAP…",notice:null,inputWindow:null}};
+    latest:null,reference:null,history:[],historyWindow:null,status:"Connecting to Polymarket TWAP…",notice:null,inputWindow:null}};
 
 function validReference(r) {
   return r && Number.isInteger(r.ts)&&r.ts>0&&r.ts%300===0&&finite(r.price)&&r.price>0&&
@@ -77,6 +77,10 @@ function parseOracleMessage(m,received=now()) {
 function ingestOracleMessage(m,received=now()) {
   const points=parseOracleMessage(m,received),o=state.oracle,ts=windowAt(received);
   if(!points.length) return false;
+  if(o.historyWindow!==ts) {o.history=[];o.historyWindow=ts;}
+  const history=new Map(o.history.filter(p=>p.exchange_ts>=ts&&p.exchange_ts<ts+300).map(p=>[p.exchange_ts,p]));
+  for(const p of points) if(p.exchange_ts>=ts&&p.exchange_ts<ts+300) history.set(p.exchange_ts,p);
+  o.history=[...history.values()].sort((a,b)=>a.exchange_ts-b.exchange_ts).slice(-300);
   o.attempts=0;o.lastSnapshot=received;
   for(const p of points) {
     if(p.exchange_ts===ts) {
@@ -113,6 +117,59 @@ function oracleComparison(t=now()) {
 }
 function oracleSubscription(action="subscribe") {
   return JSON.stringify({action,subscriptions:[{topic:TWAP_TOPIC,type:"update",filters:JSON.stringify({symbol:"btc/usd"})}]});
+}
+function oracleChartData(t=now()) {
+  const ts=windowAt(t),o=state.oracle;
+  if(o.historyWindow!==ts) {o.history=[];o.historyWindow=ts;}
+  const points=o.history.filter(p=>finite(p.price)&&p.price>0&&Number.isInteger(p.exchange_ts)&&
+    p.exchange_ts>=ts&&p.exchange_ts<ts+300&&p.exchange_ts<=t).sort((a,b)=>a.exchange_ts-b.exchange_ts);
+  return {ts,points};
+}
+function oracleChartGeometry(data,reference=null) {
+  const prices=data.points.map(p=>p.price);
+  if(reference&&finite(reference.price)&&reference.price>0) prices.push(reference.price);
+  if(!prices.length) return null;
+  const lo=Math.min(...prices),hi=Math.max(...prices),pad=Math.max(.02,(hi-lo)*.12);
+  const low=lo-pad,high=hi+pad,x=t=>16+(t-data.ts)/300*684,y=p=>244-(p-low)/(high-low)*220;
+  let previous=null;
+  const path=data.points.map(p=>{
+    const move=previous===null||p.exchange_ts-previous>3;
+    previous=p.exchange_ts;
+    return `${move?"M":"L"}${x(p.exchange_ts).toFixed(2)} ${y(p.price).toFixed(2)}`;
+  }).join(" ");
+  const last=data.points.at(-1);
+  return {path,low,high,referenceY:reference?y(reference.price):null,
+    last:last?{x:x(last.exchange_ts),y:y(last.price)}:null};
+}
+function renderOracleChart(t,c) {
+  const data=oracleChartData(t),matches=oracleMarketMatches(data.ts);
+  const geometry=matches?oracleChartGeometry(data,c.reference):null;
+  const points=matches?data.points:[];
+  $("twap-path").setAttribute("d",geometry?.path||"");
+  $("twap-chart").setAttribute("data-fresh",Boolean(c.latest&&matches));
+  $("twap-reference-line").hidden=!geometry||!c.reference;
+  // SVG presentation attributes are set too: SVG elements do not universally honor hidden.
+  $("twap-reference-line").setAttribute("visibility",geometry&&c.reference?"visible":"hidden");
+  if(geometry&&c.reference) {
+    $("twap-reference-line").setAttribute("y1",geometry.referenceY.toFixed(2));
+    $("twap-reference-line").setAttribute("y2",geometry.referenceY.toFixed(2));
+  }
+  $("twap-last-point").setAttribute("visibility",geometry?.last?"visible":"hidden");
+  if(geometry?.last) {
+    $("twap-last-point").setAttribute("cx",geometry.last.x.toFixed(2));
+    $("twap-last-point").setAttribute("cy",geometry.last.y.toFixed(2));
+  }
+  text("twap-chart-high",geometry?money(geometry.high):"");
+  text("twap-chart-low",geometry?money(geometry.low):"");
+  text("twap-reference-label",geometry&&c.reference?`${money(c.reference.price)} · ${c.reference.source==="manual"?"MANUAL":"OPENING"}`:"");
+  text("twap-chart-start",localTime(data.ts));text("twap-chart-mid",localTime(data.ts+150,true));
+  text("twap-chart-end",`${localTime(data.ts+300)} Tehran`);
+  $("twap-chart-empty").hidden=points.length>0;
+  text("twap-chart-empty",matches?"Waiting for real current-window TWAP observations…":"Waiting for verified current-window market metadata…");
+  text("twap-chart-status",!matches?"Market metadata not yet verified":points.length?
+    `${c.latest?"LIVE":state.paused?"PAUSED · historical observations":"STALE / DISCONNECTED · historical observations"} · ${points.length} observed seconds · last ${localTime(points.at(-1).exchange_ts,true)} Tehran${c.reference?"":" · opening reference missing"}`:
+    "No observations yet · no simulated history");
+  text("twap-chart-description",`Polymarket BTC/USD 60-second TWAP for ${localTime(data.ts)}–${localTime(data.ts+300)} Tehran. ${points.length} observed seconds. Missing observations are not backfilled; gaps over three seconds break the line. ${c.reference?"Dashed line is the "+(c.reference.source==="manual"?"manually entered":"exact opening")+" price to beat.":"Price to beat is missing."} ${c.latest&&matches?"Fresh feed.":"No live comparison is available."}`);
 }
 function stopOracle() {
   const o=state.oracle;
@@ -182,6 +239,7 @@ function renderOracle() {
         "Waiting for matching current-window market metadata: exact time range, BTC/USD, Chainlink source and 60s TWAP configuration. No side is assigned without it.");
   text("reference-notice",o.notice||"");$("reference-notice").hidden=!o.notice;
   $("reference-input").disabled=automatic;$("apply-reference").disabled=automatic||state.paused;
+  renderOracleChart(t,c);
 }
 
 function validRecord(r) {

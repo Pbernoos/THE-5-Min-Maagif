@@ -143,8 +143,8 @@ def test_early_draft_cutoff_remains_in_past(js):
 
 def test_static_site_paths_and_no_secret_patterns():
     html=(ROOT/'index.html').read_text()
-    assert 'href="./style.css?v=4"' in html and 'src="./app.js?v=4"' in html
-    assert 'href="./terminal.css?v=4"' in html
+    assert 'href="./style.css?v=5"' in html and 'src="./app.js?v=5"' in html
+    assert 'href="./terminal.css?v=5"' in html
     assert 'http-equiv="Content-Security-Policy"' in html
     assert 'No demonstrated predictive edge' in html
     js=(ROOT/'app.js').read_text()
@@ -535,3 +535,147 @@ def test_price_comparison_requires_matching_market_rules(js,code):
     js.eval(code+';renderOracle()')
     assert js.eval('$("reference-direction").textContent')=='WAITING'
     assert 'market metadata' in js.eval('$("reference-detail").textContent')
+
+
+def chart_snapshot(js,seconds,prices=None):
+    prices=prices or [100+i for i in range(len(seconds))]
+    m=oracle_message(TS)
+    m['payload']['data']=[{'timestamp':(TS+s)*1000,'value':p} for s,p in zip(seconds,prices)]
+    return js.eval(f'ingestOracleMessage({json.dumps(m)})')
+
+
+def test_twap_history_keeps_sorted_unique_real_points(js):
+    oracle_state(js)
+    chart_snapshot(js,[22,20,21],[102,100,101])
+    chart_snapshot(js,[21,23],[101.5,103])
+    points=value(js,'oracleChartData().points')
+    assert [p['exchange_ts'] for p in points]==[TS+20,TS+21,TS+22,TS+23]
+    assert points[1]['price']==101.5
+
+
+def test_twap_chart_never_backfills_before_first_observation(js):
+    oracle_state(js)
+    chart_snapshot(js,[25])
+    g=value(js,'oracleChartGeometry(oracleChartData(),oracleComparison().reference)')
+    assert len(value(js,'oracleChartData().points'))==1
+    assert g['path'].startswith('M73.00 ')
+    assert 'L' not in g['path']
+
+
+def test_twap_chart_does_not_draw_across_missing_intervals(js):
+    oracle_state(js)
+    chart_snapshot(js,[10,11,20,21])
+    path=js.eval('oracleChartGeometry(oracleChartData(),oracleComparison().reference).path')
+    assert path.count('M')==2 and path.count('L')==2
+
+
+def test_twap_chart_scale_includes_distant_reference(js):
+    oracle_state(js,reference=200)
+    chart_snapshot(js,[20,21],[100,101])
+    g=value(js,'oracleChartGeometry(oracleChartData(),oracleComparison().reference)')
+    assert g['low']<100 and g['high']>200
+    assert 24<g['referenceY']<244
+
+
+def test_twap_chart_flat_series_has_finite_coordinates(js):
+    oracle_state(js)
+    chart_snapshot(js,[20,21],[100,100])
+    g=value(js,'oracleChartGeometry(oracleChartData(),oracleComparison().reference)')
+    assert g['low']<100<g['high']
+    assert 'NaN' not in g['path'] and 'Infinity' not in g['path']
+
+
+def test_twap_chart_without_reference_still_draws_observations(js):
+    oracle_state(js)
+    chart_snapshot(js,[20,21])
+    js.eval('state.oracle.reference=null;renderOracle()')
+    assert js.eval('$("twap-path").getAttribute("d")').startswith('M')
+    assert js.eval('$("twap-reference-line").getAttribute("visibility")')=='hidden'
+    assert 'opening reference missing' in js.eval('$("twap-chart-status").textContent')
+    assert js.eval('oracleComparison().direction') is None
+
+
+@pytest.mark.parametrize('change',[
+    'state.paused=true',
+    'state.oracle.socket.readyState=3',
+    'state.oracle.latest.exchange_ts=now()-21',
+])
+def test_twap_chart_preserves_history_but_labels_nonlive_feed(js,change):
+    oracle_state(js)
+    chart_snapshot(js,[20,21])
+    js.eval(change+';renderOracle()')
+    assert js.eval('$("twap-path").getAttribute("d")').startswith('M')
+    assert js.eval('$("twap-chart").getAttribute("data-fresh")')=='false'
+    assert 'historical observations' in js.eval('$("twap-chart-status").textContent')
+    assert js.eval('$("reference-direction").textContent')=='WAITING'
+
+
+def test_twap_chart_resets_on_boundary_without_new_messages(js):
+    oracle_state(js)
+    chart_snapshot(js,[20,21])
+    js.eval(f'renderOracle();Date.now=()=>{TS+300}000;renderOracle()')
+    assert js.eval('state.oracle.history.length')==0
+    assert js.eval('$("twap-path").getAttribute("d")')==''
+    assert js.eval('$("twap-last-point").getAttribute("visibility")')=='hidden'
+    assert js.eval('$("twap-reference-line").getAttribute("visibility")')=='hidden'
+
+
+def test_twap_chart_filters_previous_window_snapshot_points(js):
+    oracle_state(js)
+    chart_snapshot(js,[-2,-1,0,1])
+    assert [p['exchange_ts'] for p in value(js,'oracleChartData().points')]==[TS,TS+1]
+
+
+def test_twap_chart_does_not_display_future_timestamp(js):
+    oracle_state(js)
+    chart_snapshot(js,[29,31])
+    assert [p['exchange_ts'] for p in value(js,'oracleChartData().points')]==[TS+29]
+
+
+def test_twap_chart_rejects_wrong_feed_without_history_changes(js):
+    oracle_state(js)
+    chart_snapshot(js,[20])
+    m=oracle_message(TS+21);m['payload']['window_s']=30
+    assert js.eval(f'ingestOracleMessage({json.dumps(m)})') is False
+    assert len(value(js,'oracleChartData().points'))==1
+
+
+def test_twap_chart_hidden_for_unverified_market_metadata(js):
+    oracle_state(js)
+    chart_snapshot(js,[20,21])
+    js.eval('state.lastCurrent.raw.cryptoMarketConfig.twapEnabled=false;renderOracle()')
+    assert js.eval('$("twap-path").getAttribute("d")')==''
+    assert 'not yet verified' in js.eval('$("twap-chart-status").textContent')
+
+
+def test_twap_chart_reference_line_marks_manual_source(js):
+    oracle_state(js,source='manual')
+    chart_snapshot(js,[20,21])
+    js.eval('renderOracle()')
+    assert 'MANUAL' in js.eval('$("twap-reference-label").textContent')
+    assert js.eval('$("twap-reference-line").getAttribute("visibility")')=='visible'
+
+
+def test_twap_chart_bounded_to_current_window(js):
+    oracle_state(js)
+    js.eval(f'Date.now=()=>{TS+299}000')
+    chart_snapshot(js,list(range(-299,300)))
+    assert js.eval('state.oracle.history.length')==300
+    assert len(value(js,'oracleChartData().points'))==300
+
+
+def test_twap_chart_and_new_layout_leave_journal_storage_unchanged(js):
+    oracle_state(js)
+    before=js.eval('localStorage.getItem(KEY)')
+    chart_snapshot(js,[0,1,2])
+    js.eval('renderOracle()')
+    assert js.eval('localStorage.getItem(KEY)')==before
+
+
+def test_live_chart_is_primary_and_forecasts_are_collapsed():
+    html=(ROOT/'index.html').read_text()
+    supporting=html.split('<details class="supporting-context">',1)[1].split('</details>',1)[0]
+    assert 'class="forecast-stack"' in supporting and 'id="chart"' in supporting
+    assert 'id="twap-chart"' not in supporting
+    assert html.index('id="reference-heading"')<html.index('id="twap-chart"')<html.index('id="draft-direction"')
+    assert 'aria-labelledby="twap-chart-title twap-chart-description"' in html

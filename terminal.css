@@ -1,4 +1,25 @@
 /* Trading-terminal presentation. All data and forecasts remain read-only. */
+.twap-chart-panel{margin-bottom:24px;border-color:#3d537d}
+.twap-legend{display:flex;gap:18px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--muted);margin:16px 0 0}
+.twap-legend>span{display:inline-flex;align-items:center;gap:7px}
+.twap-legend>strong{margin-left:auto;color:var(--amber);font-size:12px;font-variant-numeric:tabular-nums}
+.twap-swatch,.reference-swatch{display:inline-block;width:22px;border-top:2px solid var(--blue)}
+.reference-swatch{border-top:2px dashed var(--amber)}
+.twap-chart-wrap{position:relative;margin-top:12px;min-height:170px}
+#twap-chart{display:block;width:100%;height:auto;overflow:visible}
+#twap-path{fill:none;stroke:var(--blue);stroke-width:2;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+#twap-reference-line{stroke:var(--amber);stroke-width:1.5;stroke-dasharray:7 5;vector-effect:non-scaling-stroke}
+#twap-last-point{fill:var(--blue)}
+#twap-chart[data-fresh="false"] #twap-path{stroke:var(--muted);opacity:.65}
+#twap-chart[data-fresh="false"] #twap-last-point{fill:var(--muted)}
+#twap-chart-empty{position:absolute;left:5%;right:15%;top:38%;text-align:center;color:var(--muted);font-size:12px;background:#101622e8;padding:12px;border-radius:8px}
+.twap-time-axis{display:flex;justify-content:space-between;padding:0 12.5% 0 2%;gap:10px;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}
+.supporting-context{margin:0 0 28px;border:1px solid var(--border);border-radius:12px;padding:18px}
+.supporting-context>summary{cursor:pointer;color:var(--blue);font-size:13px;line-height:1.8}
+.supporting-context>summary>span{display:block;color:var(--muted);font-size:10px;padding-left:16px}
+.supporting-context[open]>summary{margin-bottom:20px}
+.supporting-context .terminal-grid{margin-bottom:0}
+@media(max-width:600px){.twap-chart-panel .panel-title{flex-wrap:wrap}.twap-legend{gap:12px;font-size:10px}.twap-legend>strong{margin-left:0;flex-basis:100%;font-size:11px}.twap-time-axis{font-size:9px}.twap-chart-wrap{min-height:0}#twap-chart-empty{font-size:10px;top:25%;padding:5px}.supporting-context{padding:14px}.supporting-context>summary{font-size:12px}}
 .reference-panel{margin-bottom:24px;border-color:#3d537d;background:linear-gradient(130deg,#17243b,#101622)}
 .reference-window{font-size:12px;color:var(--blue);font-variant-numeric:tabular-nums}
 .reference-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:24px;margin:20px 0}
