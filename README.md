@@ -212,3 +212,15 @@ No trained model, new forecast display, buy signal or accuracy improvement is
 included: actual collected data and chronological evaluation are required first.
 62 collector/toolkit/horizon preparation tests pass on Linux. Run from
 `collector/`: `python -m unittest test_collector test_tools test_horizon_dataset`.
+
+### Optional DeepSeek explanation layer (local only)
+
+See [`collector/DEEPSEEK.md`](collector/DEEPSEEK.md) for the local backend/panel
+using `deepseek-ai/DeepSeek-V4.1-Flash`. It ranks evidence-backed notes without
+changing numerical forecasts or issuing trades. Paid requests are OFF by default;
+the optional server-side key never goes into GitHub Pages or the browser.
+No actual three-horizon model or immutable forecast journal is connected yet:
+the panel reports waiting until a real current-window forecast is available.
+80 collector/toolkit/horizon/explainer checks pass on Linux, including mocked
+provider responses and a local HTTP security smoke test; no live paid inference
+or prediction-accuracy improvement has been tested.
