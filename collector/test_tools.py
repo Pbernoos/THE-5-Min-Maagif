@@ -38,6 +38,7 @@ class ToolTests(unittest.TestCase):
         db = self.root/'unknown.sqlite3'
         with sqlite3.connect(db) as conn:
             conn.execute('CREATE TABLE unrelated(x)')
+        conn.close()
         before = db.read_bytes()
         with self.assertRaises(ValueError), tools.reader(db):
             pass

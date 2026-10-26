@@ -200,3 +200,15 @@ prediction model. No accuracy improvement is claimed.
 Runtime databases, backups, exports, virtual environments and credentials must
 stay local; do not commit them to this public repository.
 
+### Research: next 1, 2 and 3 minutes at each window start
+
+[`collector/HORIZONS.md`](collector/HORIZONS.md) defines the selected target,
+data requirements, preparation/upload commands and first bounded CPU experiment.
+`horizon_dataset.py` builds exact +60/+120/+180-second TWAP direction targets
+from a collector backup while excluding future data from pre-start features.
+Missing/conflicting observations stay missing. `upload_horizon_data.py` can
+share the backup and derived dataset with the established W&B project team.
+No trained model, new forecast display, buy signal or accuracy improvement is
+included: actual collected data and chronological evaluation are required first.
+62 collector/toolkit/horizon preparation tests pass on Linux. Run from
+`collector/`: `python -m unittest test_collector test_tools test_horizon_dataset`.
